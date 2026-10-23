@@ -31,7 +31,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 import tldextract
-
+# suffix_list_urls=() makes tldextract use its bundled snapshot and never download (Section 1).
+_EXTRACTOR = tldextract.TLDExtract(cache_dir=False, suffix_list_urls=())
 
 # =====================================================
 # 1. SETTINGS & BRAND DATA (D7, Section 14)
@@ -100,7 +101,6 @@ SHORTENERS: Set[str] = {
 FREE_HOSTS: Set[str] = {
     "sites.google.com", "docs.google.com", "forms.google.com",
     "drive.google.com", "firebaseapp.com", "web.app", "github.io",
-    "pages.dev", "weebly.com", "wixsite.com", "blogspot.com"
     "pages.dev", "weebly.com", "wixsite.com", "blogspot.com",
     "amazonaws.com", "googleapis.com"
 }
@@ -647,7 +647,7 @@ def analyze_text(text: str, online: bool = False) -> Dict[str, Any]:
             "title": "Asks you to share a secret code or password",
             "evidence": "; ".join(asked_secrets),
             "points": 35,
-            "advice": "No legitimate bank or organization will ever ask for your OTP,re them."
+            "advice": "No legitimate bank or organization will ever ask for your OTP, PIN, or password. Never share them."
         })
 
     # Check 3: Advance-Fee / 'Pay to Receive' Patterns (Section 4 & 14)

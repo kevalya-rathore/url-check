@@ -103,20 +103,20 @@ st.markdown(
 checks_data = [
     {
         "Check": "Official domain",
-        "What it looks for": "Domain is on our verified list of a brand's authentic websites",
+        "What it looks for": "Domain is on our list of a brand's official sites (no credit when that site only hosts someone else's page or redirect)",
         "Kind": "FACT",
         "Points": "−35"
     },
     {
         "Check": "Brand on wrong domain",
-        "What it looks for": "Exact brand name registered on an unauthorized domain ending (e.g. sbi on .xyz)",
-        "Kind": "FACT",
+        "What it looks for": "Brand name used on a domain that isn't on our list of its official sites (e.g. sbi on .xyz)",
+        "Kind": "HEURISTIC",
         "Points": "+40"
     },
     {
         "Check": "Asks for a secret",
         "What it looks for": "Message text prompts recipient to share an OTP, PIN, CVV, or password",
-        "Kind": "FACT",
+        "Kind": "HEURISTIC",
         "Points": "+35"
     },
     {
@@ -157,7 +157,7 @@ checks_data = [
     },
     {
         "Check": "Typo of a brand",
-        "What it looks for": "Spelling similarity or edit distance to a recognized brand (e.g. paytn for paytm)",
+        "What it looks for": "Domain differs by one letter from a brand name of 5+ letters (e.g. paytn for paytm)",
         "Kind": "HEURISTIC",
         "Points": "+30"
     },
@@ -175,9 +175,9 @@ checks_data = [
     },
     {
         "Check": "Redirect inside link",
-        "What it looks for": "Destination link hidden inside query parameters (e.g. redirect=, url=)",
+        "What it looks for": "A full link to a different, non-official website hidden inside the link",
         "Kind": "HEURISTIC",
-        "Points": "+25"
+        "Points": "+35"
     },
     {
         "Check": "Pay to receive",
@@ -221,12 +221,6 @@ checks_data = [
         "Kind": "HEURISTIC",
         "Points": "+10"
     },
-    {
-        "Check": "Double slashes",
-        "What it looks for": "Multiple double slashes (//) in path indicating potential redirect tricks",
-        "Kind": "HEURISTIC",
-        "Points": "+10"
-    }
 ]
 
 st.table(checks_data)
@@ -280,6 +274,8 @@ with st.expander("Read our known limitations and design boundaries", expanded=Fa
           Impersonation of organizations outside this list relies entirely on generic heuristic checks.
         - **Typo detection trade-offs:** Spelling-similarity checks can occasionally flag ordinary words 
           that happen to look similar to a brand name.
+        - **Short brand names:** One-letter typos of 3–4 letter brands (for example sbl for SBI) are not
+          flagged, because at that length too many ordinary words differ by just one letter.
         - **Language support:** Message analysis currently checks English keywords and patterns only.
         - **Probabilistic nature of heuristics:** Heuristics can produce both false alarms and misses. 
           Our measured benchmark accuracy, false alarms, and misses are published on the **Evaluation** page.
@@ -299,9 +295,9 @@ with col_built:
         - **Offline link analysis:** Fast structural checks for brand spoofing, lookalikes, risky endings, and hidden destinations.
         - **SMS & WhatsApp message analysis:** Detection of urgency language, requests for secret credentials, and advance-fee schemes.
         - **Explainable scoring engine:** Clear Fact vs Heuristic breakdown with safe recommendations.
-        - **Labelled test cases:** Real-world examples of safe and phishing links on the **Examples** page.
+        - **Labelled test cases:** Synthetic examples of safe and phishing links and messages on the **Examples** page.
         - **Evaluation benchmark:** Automated accuracy and false-alarm testing on the **Evaluation** page.
-        - **100% offline execution:** Zero external dependencies or network latency during scans.
+        - **Offline analysis:** No network calls during a scan; nothing you paste is sent anywhere.
         """
     )
 
