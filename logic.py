@@ -25,7 +25,8 @@ Result shape:
 How this file is organised:
     1. Settings      word lists, the brand list (data/brands.json), lookalike letters
     2. Helpers       small functions the checks use; 2b loads the phishing list; 2c turns points into a level
-    3. analyze_url   runs 13 checks on one link
+    3. analyze_url   runs 14 checks (0-13) on one link; 3b analyze_upi checks upi:// payment links;
+                     3c decode_qr reads a QR code picture and analyze_qr_text picks the right checker
     4. analyze_text  checks a message, then runs analyze_url on every link inside it
     5. Evaluation    runs data/examples.csv through the analyzer for the Evaluation page
 
