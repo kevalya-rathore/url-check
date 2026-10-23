@@ -8,5 +8,3 @@
 | 2:00–2:30 | How it works | Link / message / QR → `logic.py` (offline rules, never opens the link) → level + FACT/HEURISTIC signals + next steps. Show the Evaluation page: false alarms and misses listed openly |
 | 2:30–2:50 | What's next | Limitations, future scope |
 | 2:50–3:00 | Team | Who built what |
-
-Before going on stage: close secrets.toml and API key tabs; open the live URL and the backup video; load the extension (`chrome://extensions` → Load unpacked → `extension/`) and keep the QR test images folder open.
