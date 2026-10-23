@@ -2,7 +2,7 @@
 # Shape: header -> input -> PART 1 (actions, only on submit) -> PART 2 (display, every rerun)
 import streamlit as st
 
-from logic import analyze_text, analyze_url, refang_url
+from logic import analyze_qr_text, analyze_text, analyze_url, decode_qr, refang_url
 
 
 def severity(points):
@@ -64,17 +64,34 @@ with st.container(horizontal=True, horizontal_alignment="center"):    # a centre
 if "result" not in st.session_state:
     st.session_state["result"] = None
 
-mode = st.segmented_control("What do you want to check?", ["Link", "Message"], default="Link", required=True)
+mode = st.segmented_control("What do you want to check?", ["Link", "Message", "QR code"], default="Link", required=True)
 
 with st.form("input", clear_on_submit=False):
+    image = None
     if mode == "Link":
-        text = st.text_input("Link to check", placeholder="e.g. sbi.co.in").strip()
-    else:
+        text = st.text_input("Link to check", placeholder="e.g. sbi.co.in or upi://pay?pa=...").strip()
+    elif mode == "Message":
         text = st.text_area("Message to check", placeholder="Paste the SMS or WhatsApp message here").strip()
+    else:
+        text = ""
+        image = st.file_uploader("Picture of the QR code", type=["png", "jpg", "jpeg", "webp"])
     submitted = st.form_submit_button("Check for warning signs", type="primary", icon=":material/search:", width="stretch")
 
 # PART 1: actions, only on the run where the button was clicked
-if submitted:
+if submitted and mode == "QR code":
+    if image is None:
+        st.error("Choose a picture of a QR code first.")
+    else:
+        try:
+            codes = decode_qr(image)    # only reads the picture; nothing the code points to is opened
+        except ValueError:
+            st.session_state["result"] = None
+            st.error("No QR code found in that picture. Try a sharper photo with the whole code in view.")
+        else:
+            if len(codes) > 1:
+                st.info(f"This picture has {len(codes)} QR codes. Checking the first one.")
+            st.session_state["result"] = analyze_qr_text(codes[0])
+elif submitted:
     if not text:
         st.error("Input can't be empty.")
     elif len(text) > 2000:

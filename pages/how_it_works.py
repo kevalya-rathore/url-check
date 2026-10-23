@@ -311,7 +311,6 @@ with col_not_built.container(border=True):
     st.markdown(
         """
         - **Domain-age registry lookup:** Not enabled in this demo (offline-only operation).
-        - **QR-code scanner:** Parsing links embedded in images is not implemented.
         - **Email header analysis:** SPF, DKIM, and DMARC inspection is not included.
         - **Page opening or screenshots:** Deliberately omitted to prevent exposing users to malicious payloads.
         - **AI / LLM generated text:** Scans use deterministic, auditable rules rather than opaque language models.

@@ -37,9 +37,12 @@ import csv
 import json
 from pathlib import Path
 import re
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import tldextract
+import zxingcpp
+from PIL import Image, UnidentifiedImageError
+
 # tldextract splits a website name into parts. suffix_list_urls=() makes it use its built-in
 # list of endings and never download one; extra_suffixes teaches it the new ".bank.in" ending.
 _EXTRACTOR = tldextract.TLDExtract(cache_dir=False, suffix_list_urls=(), extra_suffixes=["bank.in"])
@@ -119,6 +122,12 @@ URGENT_WORDS = [
 
 SECRET_WORDS = [
     "otp", "pin", "cvv", "password", "card number", "upi pin", "passcode"
+]
+
+# Words in a UPI payee name or note that promise you money; a QR code can only take money from you
+UPI_BAIT_WORDS = [
+    "refund", "cashback", "prize", "reward", "lottery", "winner", "won", "receive",
+    "bonus", "claim", "gift", "lucky draw", "kyc", "verify"
 ]
 
 # Lookalike characters mapped to the Latin letter they imitate,
@@ -311,6 +320,10 @@ def analyze_url(raw_url: str) -> dict:
             "signals": [],
             "next_steps": ["Enter a valid URL to analyze."]
         }
+
+    # A UPI payment link isn't a website, so it gets its own checks
+    if original_input.lower().startswith("upi://"):
+        return analyze_upi(original_input)
 
     url, had_explicit_scheme = normalize_url(original_input)
     parsed = urlparse(url)
@@ -584,6 +597,138 @@ def analyze_url(raw_url: str) -> dict:
         "signals": signals,
         "next_steps": next_steps
     }
+
+
+# =====================================================
+# 3b. UPI PAYMENT ANALYSIS (upi://pay links, usually from QR codes)
+# =====================================================
+
+def analyze_upi(raw_upi: str) -> dict:
+    """
+    Check a UPI payment link such as "upi://pay?pa=shop@okaxis&pn=Shop&am=100".
+    pa = who gets paid (the UPI ID), pn = the name shown to you, am = the amount, tn = a note.
+    Returns the result dictionary described at the top of this file.
+    """
+    original_input = raw_upi.strip()
+    parsed = urlparse(original_input)
+    action = parsed.netloc.lower()    # "pay" for a payment, "mandate" for repeating payments (autopay)
+    # parse_qs gives lists, e.g. {"pa": ["shop@okaxis"]}; keys are lowercased because some apps write "PA="
+    fields = {key.lower(): values[0].strip() for key, values in parse_qs(parsed.query).items()}
+    payee_id = fields.get("pa", "")
+    payee_name = fields.get("pn", "")
+    note = fields.get("tn", "")
+
+    signals = []
+
+    # Check 1: the UPI ID is missing or isn't "name@bank"
+    if not re.fullmatch(r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}", payee_id):
+        signals.append({
+            "kind": "FACT",
+            "check": "upi_bad_id",
+            "title": "The payee's UPI ID is missing or not in the normal name@bank form",
+            "evidence": payee_id or "(no pa= field)",
+            "points": 30,
+            "advice": "Don't pay with this QR code. Ask the person for their UPI ID and type it in your UPI app yourself."
+        })
+
+    # Check 2: sets up automatic repeating payments instead of one payment
+    if action == "mandate":
+        signals.append({
+            "kind": "FACT",
+            "check": "upi_mandate",
+            "title": "Sets up automatic repeating payments (a UPI autopay mandate), not a single payment",
+            "evidence": "upi://mandate",
+            "points": 30,
+            "advice": "Only approve autopay for a subscription you started yourself, inside that company's own app."
+        })
+
+    # Check 3: the amount is already filled in
+    amount = fields.get("am", "")
+    if amount:
+        signals.append({
+            "kind": "FACT",
+            "check": "upi_fixed_amount",
+            "title": f"The amount is already filled in: Rs {amount}",
+            "evidence": f"am={amount}",
+            "points": 10,
+            "advice": "Make sure you actually owe this exact amount before you enter your UPI PIN."
+        })
+
+    # Check 4: the name or note promises you money (refund, prize, cashback...)
+    name_and_note = (payee_name + " " + note).lower()
+    found_bait = [word for word in UPI_BAIT_WORDS if re.search(rf"\b{re.escape(word)}\b", name_and_note)]
+    if found_bait:
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "upi_receive_bait",
+            "title": f"Promises you money, but this QR code can only take money from you: {', '.join(found_bait)}",
+            "evidence": f"pn={payee_name}  tn={note}".strip(),
+            "points": 35,
+            "advice": "You never need to scan a QR code or enter your UPI PIN to receive money. Don't pay."
+        })
+
+    # Check 5: the payee name or UPI ID uses a bank or company name from brands.json
+    name_words = set(re.split(r"[^a-z0-9]+", (payee_name + " " + payee_id.split("@")[0]).lower()))
+    for name, brand in BRAND_NAMES.items():
+        if name in name_words:
+            primary_official = BRANDS[brand][0] if BRANDS.get(brand) else f"{brand}.com"
+            signals.append({
+                "kind": "HEURISTIC",
+                "check": "upi_brand_name",
+                "title": f"The payee calls itself '{brand.upper()}', but anyone can choose that name",
+                "evidence": f"pn={payee_name}  pa={payee_id}",
+                "points": 20,
+                "advice": f"To pay {brand.upper()}, use its official app or {primary_official}, not a QR code someone sent you."
+            })
+            break
+
+    score = max(0, min(100, sum(signal["points"] for signal in signals)))
+    level = decide_level(score, signals)
+    next_steps = build_next_steps(
+        signals, level,
+        "Check that the payee name in your UPI app is who you meant to pay before you enter your PIN."
+    )
+    # The one fact every UPI QR code shares, shown first
+    who = f"{payee_name} ({payee_id})" if payee_name else payee_id or "an unknown payee"
+    next_steps.insert(0, f"This QR code sends money from your account to {who}. It can never put money into your account.")
+
+    return {
+        "input": original_input,
+        "score": score,
+        "level": level,
+        "signals": signals,
+        "next_steps": next_steps
+    }
+
+
+# =====================================================
+# 3c. QR CODES (read the picture, then pick the right checker)
+# =====================================================
+
+def decode_qr(image_file) -> list:
+    """
+    Read every QR code in a picture and return the text inside each one.
+    Only reads the pixels: whatever the code points to is never opened.
+    Raises ValueError if the file isn't a picture or has no readable QR code.
+    """
+    try:
+        image = Image.open(image_file)
+        image.load()
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as error:
+        raise ValueError("Not a readable picture") from error
+    codes = zxingcpp.read_barcodes(image.convert("L"), formats=zxingcpp.BarcodeFormat.QRCode)    # "L" = greyscale
+    texts = [code.text for code in codes if code.text]
+    if not texts:
+        raise ValueError("No QR code found")
+    return texts
+
+
+def analyze_qr_text(text: str) -> dict:
+    """A QR code holds a link, a UPI payment or plain text: one word goes to analyze_url, anything longer to analyze_text."""
+    text = text.strip()
+    if " " in text or "\n" in text:
+        return analyze_text(text)
+    return analyze_url(text)    # analyze_url passes upi:// on to analyze_upi
 
 
 # =====================================================
