@@ -41,7 +41,7 @@ function collectLinks() {
 
 // Runs inside the page: a badge after every risky link, and a summary box in the corner.
 // Only textContent and title are used, never innerHTML, because the reasons contain the suspicious links.
-function markLinks(results, app, manual) {
+function markLinks(results, manual) {
   document.querySelectorAll(".aegis-badge, #aegis-summary").forEach((old) => old.remove());    // clear an earlier check
   const colors = { High: "#E11D48", Caution: "#D97706" };
   const byHref = new Map(results.map((result) => [result.href, result]));
@@ -55,7 +55,9 @@ function markLinks(results, app, manual) {
     badge.title = result.reasons.join("\n") + "\n\nClick for the full explanation";    // hover to see why
     badge.style.cssText = `background:${colors[result.level]};color:#fff;font:bold 11px/1.6 sans-serif;`
       + "padding:0 6px;margin-left:4px;border-radius:8px;cursor:help;white-space:nowrap;";
-    badge.onclick = () => window.open(app + "?url=" + encodeURIComponent(result.href));
+    // Ask the extension to open the app, like the right-click item does. window.open from here would open it as a
+    // popup of this page, and pages with strict security rules (WhatsApp Web) then break the app's styling.
+    badge.onclick = () => chrome.runtime.sendMessage({ check: result.href });
     a.style.outline = `2px solid ${colors[result.level]}`;
     a.after(badge);
   }
@@ -96,7 +98,7 @@ async function scanTab(tabId, manual) {
     const response = await fetch(API, { method: "POST", body: JSON.stringify(links) });
     if (!response.ok) throw new Error("api.py answered " + response.status);
     const results = await response.json();
-    await chrome.scripting.executeScript({ target: { tabId }, func: markLinks, args: [results, APP, manual] });
+    await chrome.scripting.executeScript({ target: { tabId }, func: markLinks, args: [results, manual] });
   } catch {
     if (manual) openInApp(links);    // never open tabs by itself, e.g. when api.py isn't running
   }
@@ -108,6 +110,12 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
   const host = new URL(tab.url).hostname;
   if (tab.url.startsWith(APP) || host === "localhost" || host === "127.0.0.1") return;    // skip our own app
   scanTab(tabId, false);
+});
+
+// A click on a badge: open the app in a new tab next to the page, with the link to explain
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (typeof message.check !== "string") return;
+  chrome.tabs.create({ url: APP + "?url=" + encodeURIComponent(message.check), index: sender.tab.index + 1 });
 });
 
 // The toolbar button checks the page again, the same as the "Check all links" menu item
