@@ -1,12 +1,12 @@
-# PROJECT NAME
+# Aegis Guard
 
 **Live demo:** https://YOUR-APP.streamlit.app
 
 ## Problem
-Who has the problem, and what goes wrong for them today. 2–3 sentences.
+Phishing attacks and online scams pose serious threats to digital security. Users often struggle to identify malicious URLs, fraudulent messages, and deceptive websites before interacting with them. Existing security awareness gaps leave users vulnerable to financial fraud, data theft, and identity compromise.
 
 ## Solution
-What the app does, in one paragraph.
+Aegis is a Python-based, AI-assisted phishing detection system designed to identify potential cyber threats before users click. By analysing URLs and suspicious messages using machine learning and rule-based detection, Aegis provides risk assessments, explainable threat indicators, and actionable safety recommendations, empowering users to make safer digital decisions.
 
 ## Features
 - Feature 1 (working)
@@ -18,8 +18,8 @@ What the app does, in one paragraph.
 
 ## Setup
 ```powershell
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/kevalya-rathore/url-check.git
+cd url-check
 py -V:3.14 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -47,7 +47,7 @@ Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and fill in:
 ## Team contributions
 | Member | Role | Built |
 |---|---|---|
-| | App lead | |
-| | Logic/data | |
-| | UX + testing | |
-| | Docs + pitch | |
+| Kevalya Rathore | App lead | |
+| Abhay Katta | Logic/data | |
+| Mohammad Zaid Qureshi | UX + testing | |
+| Prakarsh Jain | Docs + pitch | |
