@@ -1,4 +1,5 @@
-// Aegis Guard extension: right-click items that send a link, selected text or a whole page's links to Aegis Guard.
+// Aegis Guard extension: checks each page's links when it loads, plus a toolbar button and right-click items
+// that send a link, selected text or a whole page's links to Aegis Guard.
 // It only reads the links' addresses; it never opens any of them.
 const APP = "https://aegis-guard-vanguard.streamlit.app/";    // use "http://localhost:8501/" when running locally
 const API = "http://127.0.0.1:8600/check";    // api.py; when it's running, results are drawn on the page itself
@@ -40,7 +41,7 @@ function collectLinks() {
 
 // Runs inside the page: a badge after every risky link, and a summary box in the corner.
 // Only textContent and title are used, never innerHTML, because the reasons contain the suspicious links.
-function markLinks(results, app) {
+function markLinks(results, app, manual) {
   document.querySelectorAll(".aegis-badge, #aegis-summary").forEach((old) => old.remove());    // clear an earlier check
   const colors = { High: "#E11D48", Caution: "#D97706" };
   const byHref = new Map(results.map((result) => [result.href, result]));
@@ -61,6 +62,7 @@ function markLinks(results, app) {
 
   const high = results.filter((result) => result.level === "High").length;
   const caution = results.filter((result) => result.level === "Caution").length;
+  if (!manual && !high && !caution) return;    // the automatic check stays quiet on clean pages
   const summary = document.createElement("div");
   summary.id = "aegis-summary";
   const count = results.length === 1 ? "1 link" : `${results.length} links`;
@@ -81,23 +83,39 @@ function openInApp(links) {
   chrome.tabs.create({ url: APP + "?links=" + encodeURIComponent(JSON.stringify(keep)) });
 }
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+// Checks every link on a tab. manual = the user picked our menu item; only then may we open the app in a new tab.
+async function scanTab(tabId, manual) {
+  let links;
+  try {
+    [{ result: links }] = await chrome.scripting.executeScript({ target: { tabId }, func: collectLinks });
+  } catch {
+    return;    // Chrome doesn't let extensions read some pages (chrome:// pages, the Web Store, the PDF viewer)
+  }
+  if (!manual && !links.length) return;
+  try {
+    const response = await fetch(API, { method: "POST", body: JSON.stringify(links) });
+    if (!response.ok) throw new Error("api.py answered " + response.status);
+    const results = await response.json();
+    await chrome.scripting.executeScript({ target: { tabId }, func: markLinks, args: [results, APP, manual] });
+  } catch {
+    if (manual) openInApp(links);    // never open tabs by itself, e.g. when api.py isn't running
+  }
+}
+
+// Check each page automatically once it has finished loading
+chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.status !== "complete" || !/^https?:/.test(tab.url || "")) return;
+  const host = new URL(tab.url).hostname;
+  if (tab.url.startsWith(APP) || host === "localhost" || host === "127.0.0.1") return;    // skip our own app
+  scanTab(tabId, false);
+});
+
+// The toolbar button checks the page again, the same as the "Check all links" menu item
+chrome.action.onClicked.addListener((tab) => scanTab(tab.id, true));
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "aegis-page") {
-    // activeTab lets us read this one tab, only because the user just clicked our menu item
-    let links;
-    try {
-      [{ result: links }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: collectLinks });
-    } catch {
-      return;    // Chrome doesn't let extensions read some pages (chrome:// pages, the Web Store, the PDF viewer)
-    }
-    try {
-      const response = await fetch(API, { method: "POST", body: JSON.stringify(links) });
-      if (!response.ok) throw new Error("api.py answered " + response.status);
-      const results = await response.json();
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: markLinks, args: [results, APP] });
-    } catch {
-      openInApp(links);
-    }
+    scanTab(tab.id, true);    // also re-checks pages that change without reloading, like an email opened in Gmail
     return;
   }
   const query = info.linkUrl
