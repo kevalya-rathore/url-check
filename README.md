@@ -6,15 +6,36 @@
 Phishing attacks and online scams pose serious threats to digital security. Users often struggle to identify malicious URLs, fraudulent messages, and deceptive websites before interacting with them. Existing security awareness gaps leave users vulnerable to financial fraud, data theft, and identity compromise.
 
 ## Solution
-Aegis is a Python-based, AI-assisted phishing detection system designed to identify potential cyber threats before users click. By analysing URLs and suspicious messages using machine learning and rule-based detection, Aegis provides risk assessments, explainable threat indicators, and actionable safety recommendations, empowering users to make safer digital decisions.
+Aegis Guard checks a link, an SMS/WhatsApp message, or a QR code for phishing warning signs **before** you open it. It never visits the link: every check works offline on the text of the link or message. The verdict is one of three levels (Low, Caution, High), and every warning sign behind it is labelled **FACT** (anyone can verify it from the link) or **HEURISTIC** (an educated guess from common scam patterns), with safe next steps and where to report fraud in India.
 
 ## Features
-- Feature 1 (working)
-- Feature 2 (working)
+- **Link check (working).** 14 offline checks: official brand domains (132 brands in `data/brands.json`, plus every RBI-only `.bank.in` bank), brand impersonation and one-letter typos, lookalike letters and punycode, IP-address hosts, the `@` trick, plain `http://`, risky endings, link shorteners, free-hosting abuse, links hidden inside links, and an offline OpenPhish snapshot (23 Oct 2026).
+- **Hidden redirect destinations (working).** Redirect links from Google (`/url`, `/goto`), Facebook (`/l.php`) and YouTube (`/redirect`) are judged by the destination written inside them. That destination is read from the link text and never opened. A redirect link with no readable destination is flagged.
+- **Message check (working).** Urgency and threat words, requests for an OTP/PIN/password, "pay first to receive" tricks, Indian threat scams (digital arrest, customs, challan, electricity cut-off). Every link in the message is also run through the link check, and a message is never rated safer than its riskiest link.
+- **QR code check (working).** Upload a picture of a QR code. It is decoded from the pixels only (zxing-cpp), then checked as a link, a UPI payment or a message.
+- **UPI payment check (working).** For `upi://` links, typed in or from a QR code, the app checks for a malformed payee ID, autopay mandates, a pre-filled amount, "refund/prize/cashback" bait, and a payee using a bank or brand name. It always reminds you that a UPI QR code can only take money from you.
+- **Browser extension (working, load unpacked).** Right-click a link or selected text in Chrome and choose "Check with Aegis Guard". The extension opens the app with the link already checked.
+- **Examples and Evaluation pages (working).** 58 labelled, synthetic, defanged examples. The Evaluation page runs all of them and lists every false alarm and miss.
+- **Defanged input (working).** `hxxps://` and `[.]` are turned back into a real link before checking.
 
 ## Tech stack
-- Python 3.14, Streamlit
-- (APIs, datasets, libraries)
+- Python 3.14, Streamlit 1.66.1 (multipage app with `st.navigation`)
+- `tldextract` (built-in suffix snapshot, no download), Pillow + `zxing-cpp` (QR decoding)
+- Data: `data/brands.json` (brand → official domains), `data/openphish_feed.txt` (offline OpenPhish snapshot, non-commercial use), `data/examples.csv` (labelled examples)
+- Browser extension: Chrome Manifest V3 (`extension/`)
+- No API keys, no LLM, no network calls during a check
+
+## Project layout
+| Path | What it is |
+|---|---|
+| `app.py` | Entry point: page config, logo, theme fixes, top navigation bar |
+| `pages/home.py` | Check a link, message or QR code; shows the verdict, signals and next steps |
+| `pages/examples.py` | The labelled examples, each with an "Analyze" button |
+| `pages/evaluation.py` | Accuracy, false alarms and misses on the examples |
+| `pages/how_it_works.py` | Plain-language explanation of every check, the verdict rules and the limitations |
+| `logic.py` | All detection logic, no Streamlit: `analyze_url`, `analyze_text`, `analyze_upi`, `decode_qr`, `analyze_qr_text`, `evaluate_examples` |
+| `extension/` | The Chrome right-click extension |
+| `assets/qr-test-images/` | Four sample QR codes for the demo (official SBI link, lookalike phishing link, fake UPI refund, normal shop UPI) |
 
 ## Setup
 ```powershell
@@ -26,28 +47,44 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Environment variables
-Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and fill in:
+### Browser extension
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and choose the `extension` folder.
+3. Right-click any link (or select a message) and choose **Check with Aegis Guard**.
 
-| Name | What it is |
-|---|---|
-| `API_KEY` | placeholder: your own key from ... |
+The extension sends to the live demo by default. To use a local copy, change `APP` in `extension/background.js` to `http://localhost:8501/` and reload the extension. It passes the link as `?url=...` (or a selected message as `?text=...`), and the home page checks it once on arrival.
+
+## Environment variables
+None. The app runs fully offline and reads no secrets. `.streamlit/secrets.toml.example` is left over from the starter template.
 
 ## Known limitations
-- ...
+- Because we never open the link, a scam page on a clean-looking domain with no suspicious words or endings is rated **Low**.
+- A hacked official website still matches our official-domain list.
+- Brand checks cover the 132 brands in `brands.json`. Impersonation of other organisations relies on the general checks.
+- One-letter typos of short brand names (e.g. `sbl` for SBI) aren't flagged, to avoid false alarms.
+- The OpenPhish snapshot ages within hours, so a link that isn't on the list is not automatically safe.
+- Redirect unwrapping only knows Google, Facebook and YouTube redirect links.
+- A UPI ID can't be verified offline: we can't tell whether `shop@okaxis` really belongs to that shop.
+- Only the first QR code in a picture is checked.
+- Message checks are English only.
+- Current results on our own test set (24 Oct 2026): 54 of 58 correct, 1 false alarm, 3 misses. The Evaluation page always shows the live numbers.
 
 ## Future scope
-- ...
+- Optional domain-age lookup via RDAP (off by default, `timeout=5`, visible "couldn't check" fallback)
+- Hindi and other Indian-language message checks
+- More redirect wrappers, and a larger, regularly refreshed phishing list
+- Publishing the browser extension to the Chrome Web Store, plus a mobile share-sheet target
 
 ## Third-party tools and AI disclosure
 - Starter template: this repo began from our own pre-event template (empty Streamlit skeleton, README, `.gitignore`), declared as boilerplate.
-- Libraries / APIs / datasets: ...
-- AI tools: (none / which tool, and what it was used for)
+- Libraries: Streamlit, tldextract, Pillow, zxing-cpp.
+- Datasets: OpenPhish community feed (snapshot of 23 Oct 2026, non-commercial use). Brand list and examples were written by the team, and all examples are synthetic.
+- AI tools: Claude Code (Anthropic) was used to review code against the brief, explain fixes, and directly apply some changes: the `logic.py` readability refactor, the QR code and UPI checks, and this documentation update. Every applied change was read and committed by a team member. _(Add any other tools teammates used.)_
 
 ## Team contributions
-| Member | Role | Built |
-|---|---|---|
-| Kevalya Rathore | App lead | |
-| Abhay Katta | Logic/data | |
-| Mohammad Zaid Qureshi | UX + testing | |
-| Prakarsh Jain | Docs + pitch | |
+| Member | Role |
+|---|---|
+| Kevalya Rathore | App lead |
+| Abhay Katta | Logic/data |
+| Mohammad Zaid Qureshi | UX + testing |
+| Prakarsh Jain | Docs + pitch |

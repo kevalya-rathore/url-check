@@ -1,5 +1,4 @@
 streamlit==1.66.1
-requests
 tldextract
 pillow
 zxing-cpp

@@ -123,10 +123,10 @@ if result is None:
     paste_col, check_col, verdict_col = st.columns(3)
     with paste_col.container(border=True):
         st.markdown(":material/content_paste: **1. Paste**")
-        st.caption("A link or message you received by SMS, WhatsApp or email.")
+        st.caption("A link, message or QR code you received by SMS, WhatsApp or email.")
     with check_col.container(border=True):
         st.markdown(":material/manage_search: **2. We check**")
-        st.caption("13 link checks and 4 message checks, run offline in under a second.")
+        st.caption("14 link checks, 4 message checks and 5 UPI payment checks, run offline in under a second.")
     with verdict_col.container(border=True):
         st.markdown(":material/task_alt: **3. Get a clear verdict**")
         st.caption("How risky it is, the reasons behind it, and safe next steps.")
