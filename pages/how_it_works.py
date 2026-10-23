@@ -98,8 +98,8 @@ st.markdown(
 
 checks_data = [
     {
-        "Check": "Known phishing site",
-        "What it looks for": "The link or website appears in our offline snapshot of the OpenPhish feed",
+        "Check": "Known phishing or malware site",
+        "What it looks for": "The link or website appears in our offline snapshot of the OpenPhish (phishing) or URLhaus (malware downloads) feed",
         "Kind": "FACT",
         "Severity": "Severe"
     },
@@ -129,7 +129,7 @@ checks_data = [
     },
     {
         "Check": "Lookalike letters",
-        "What it looks for": "Non-Latin characters or punycode (xn--) impersonating legitimate Latin letters",
+        "What it looks for": "Letters from another alphabet, or punycode (xn--), in the website name. They can look identical to English letters",
         "Kind": "FACT",
         "Severity": "Severe"
     },
@@ -159,9 +159,15 @@ checks_data = [
     },
     {
         "Check": "Typo of a brand",
-        "What it looks for": "Domain is one letter away from a well-known brand name (e.g. paytn for paytm)",
+        "What it looks for": "Domain is one letter away from a well-known brand name. Lookalike typos (paytn for paytm, a doubled letter, two letters swapped) count more",
         "Kind": "HEURISTIC",
-        "Severity": "Moderate"
+        "Severity": "Moderate, or Severe for a lookalike typo"
+    },
+    {
+        "Check": "Brand vs link mismatch",
+        "What it looks for": "A message names a brand (e.g. SBI) but its link goes to a site that brand doesn't own",
+        "Kind": "HEURISTIC",
+        "Severity": "Moderate, or Severe if it asks you to verify or log in"
     },
     {
         "Check": "Coercion theme",
@@ -281,6 +287,10 @@ with st.expander("Read our known limitations and design boundaries", expanded=Fa
         - **The phishing list ages quickly:** Phishing sites often live only hours, so an offline snapshot misses
           newer ones. That's why the structural checks stay the main defence.
         - **Language support:** Message analysis currently checks English keywords and patterns only.
+        - **The live demo runs on a server:** What you paste is sent to our Streamlit Community Cloud app to be
+          checked (we don't save it). The browser extension puts the link or selected text in the page address,
+          so it also appears in your browser history. Remove OTPs, PINs and account numbers before checking a
+          message, or run Aegis Guard on your own computer.
         - **Probabilistic nature of heuristics:** Heuristics can produce both false alarms and misses. 
           Our measured benchmark accuracy, false alarms, and misses are published on the **Evaluation** page.
         """
@@ -297,12 +307,12 @@ with col_built.container(border=True):
     st.markdown(
         """
         - **Offline link analysis:** Fast structural checks for brand spoofing, lookalikes, risky endings, and hidden destinations.
-        - **SMS & WhatsApp message analysis:** Detection of urgency language, requests for secret credentials, and advance-fee schemes.
+        - **SMS & WhatsApp message analysis:** Detection of urgency language, requests for secret credentials, advance-fee schemes, and messages that name a brand but link elsewhere.
         - **Explainable verdicts:** Every warning is labelled Fact or Heuristic, with safe next steps.
         - **Labelled test cases:** Synthetic examples of safe and phishing links and messages on the **Examples** page.
         - **Evaluation benchmark:** Automated accuracy and false-alarm testing on the **Evaluation** page.
-        - **Offline analysis:** No network calls during a scan; nothing you paste is sent anywhere.
-        - **Known phishing list:** Offline snapshot of the OpenPhish community feed (23 Oct 2026), used non-commercially. A link that isn't on the list is not automatically safe.
+        - **Offline analysis:** No network calls during a check: the app never contacts the link or any other website, and doesn't save what you paste.
+        - **Known bad link lists:** Offline snapshots of the OpenPhish community feed (23 Oct 2026, used non-commercially) and the URLhaus malware-download feed from abuse.ch (24 Oct 2026). A link that isn't on either list is not automatically safe.
         """
     )
 

@@ -2,16 +2,12 @@
 # Shape: header -> load the examples -> display (each "Analyze" button acts on the run it was clicked)
 import streamlit as st
 
-from logic import analyze_text, analyze_url, load_examples, refang_url
+from logic import analyze_example, load_examples
 
 
 def analyze_and_open(row):
     """Check one example and show its result on the home page."""
-    clean_input = refang_url(row["input"])    # turn "hxxps://sbi[.]xyz" back into a real link, only for checking
-    if row["channel"] == "url":
-        st.session_state["result"] = analyze_url(clean_input)
-    else:
-        st.session_state["result"] = analyze_text(clean_input)
+    st.session_state["result"] = analyze_example(row)    # turns "hxxps://sbi[.]xyz" back into a real link, only for checking
     st.switch_page("pages/home.py")    # the home page shows whatever is in st.session_state["result"]
 
 
@@ -28,6 +24,8 @@ def show_examples(rows, tab_name):
                     st.badge("Benign", icon=":material/check_circle:", color="green")
                 if row["channel"] == "url":
                     st.badge("Link", icon=":material/link:", color="gray")
+                elif row["channel"] == "upi":
+                    st.badge("UPI / QR", icon=":material/qr_code_2:", color="gray")
                 else:
                     st.badge("Message", icon=":material/sms:", color="gray")
             st.code(row["input"], language=None, wrap_lines=True)    # shown exactly as stored (defanged), never as a link

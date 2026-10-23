@@ -36,7 +36,9 @@ The points are added up into a score, and the score becomes a level: Low, Cautio
 """
 
 import csv
+import ipaddress
 import json
+from itertools import pairwise
 from pathlib import Path
 import re
 from urllib.parse import parse_qs, unquote, urlparse
@@ -126,6 +128,15 @@ SECRET_WORDS = [
     "otp", "pin", "cvv", "password", "card number", "upi pin", "passcode"
 ]
 
+# Endings only verified organisations can register, so a message may link to them whatever brand it names
+RESTRICTED_ENDINGS = {"gov.in", "nic.in", "bank.in"}
+
+# A message asking you to act on its link: e.g. "verify at", "update your KYC", "log in here"
+ACTION_WORDS = r"\b(?:verify|update|kyc|login|log\s+in|sign\s+in|confirm|re-?activate|unblock|claim|click)\b"
+
+# Letters that are easy to misread for each other at a glance, e.g. "paytn" for "paytm"
+LOOKALIKE_LETTERS = {"m": "n", "n": "m", "i": "l", "l": "i", "u": "v", "v": "u", "c": "e", "e": "c", "g": "q", "q": "g"}
+
 # Words in a UPI payee name or note that promise you money; a QR code can only take money from you
 UPI_BAIT_WORDS = [
     "refund", "cashback", "prize", "reward", "lottery", "winner", "won", "receive",
@@ -192,6 +203,31 @@ def one_edit_apart(a: str, b: str) -> bool:
     return True    # no difference found, so one word is the other plus one letter at the end
 
 
+def lookalike_typo(word: str, brand: str) -> bool:
+    """
+    True for the typos scammers pick because they survive a quick read: a lookalike letter ("paytn"),
+    a doubled letter added or dropped ("gooogle", "swigy"), or two neighbouring letters swapped ("amzaon").
+    """
+    if word == brand:
+        return False
+    for i, letter in enumerate(brand):
+        start, rest = brand[:i], brand[i + 1:]
+        if word == start + LOOKALIKE_LETTERS.get(letter, letter) + rest:    # paytm -> paytn
+            return True
+        if word == start + letter + letter + rest:                          # google -> gooogle
+            return True
+        if rest.startswith(letter) and word == start + rest:                # swiggy -> swigy
+            return True
+        if rest and word == start + rest[0] + letter + rest[1:]:            # amazon -> amzaon
+            return True
+    return False
+
+
+def on_free_host(host: str) -> bool:
+    """True if the host is a free host or a site under one, e.g. "mysite.pages.dev"."""
+    return any(host == free_host or host.endswith("." + free_host) for free_host in FREE_HOSTS)
+
+
 def normalize_visual_lookalikes(text: str) -> str:
     """Replace lookalike letters with the Latin letter they imitate, e.g. "g00gle" -> "google", "rn" -> "m"."""
     lower_text = text.lower()
@@ -223,10 +259,11 @@ def detect_punycode_or_unicode(host: str) -> tuple[bool, str]:
 
 
 # =====================================================
-# 2b. KNOWN PHISHING LIST (offline OpenPhish snapshot)
+# 2b. KNOWN BAD LINK LISTS (offline OpenPhish and URLhaus snapshots)
 # =====================================================
 
-FEED_DATE = "23 Oct 2026"
+FEED_DATE = "23 Oct 2026"       # OpenPhish: phishing pages
+URLHAUS_DATE = "24 Oct 2026"    # URLhaus (abuse.ch): malware downloads, e.g. fake "mParivahan.apk"
 
 # Redirect pages that trusted sites put in front of outgoing links: (domain, path) -> query fields holding the real link
 REDIRECT_WRAPPERS = {
@@ -240,7 +277,14 @@ REDIRECT_WRAPPERS = {
 }
 
 # Services where one host serves many different people's files
-SHARED_STORAGE = {"backblazeb2.com", "contabostorage.com", "googleapis.com", "dropbox.com"}
+SHARED_STORAGE = {
+    "backblazeb2.com", "contabostorage.com", "googleapis.com", "dropbox.com",
+    # file and code hosts that show up in the URLhaus feed
+    "github.com", "githubusercontent.com", "gitlab.com", "bitbucket.org", "discordapp.com",
+    "dropboxusercontent.com", "google.com", "mediafire.com", "catbox.moe", "filebin.net",
+    "gofile.io", "yandex.ru", "ibb.co", "wsimg.com", "cloudinary.com", "archive.org",
+    "pastebin.com", "pixeldrain.com", "tmpfiles.org"
+}
 
 
 def url_key(url: str) -> str:
@@ -249,18 +293,26 @@ def url_key(url: str) -> str:
     return ((parsed.hostname or "") + parsed.path).lower().rstrip("/")
 
 
-def load_phishing_feed() -> tuple[set, set]:
-    """Read data/openphish_feed.txt into (exact links, whole hosts). Never opens any of the links."""
-    feed_path = DATA_DIR / "openphish_feed.txt"
+def load_feed(file_name: str) -> tuple[set, set]:
+    """Read a list of bad links in data/ into (exact links, whole hosts). Never opens any of the links."""
+    feed_path = DATA_DIR / file_name
     links = set()
     hosts = set()
     with open(feed_path, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
-            if not line:
+            if not line or line.startswith("#"):
                 continue
             links.add(url_key(line))
             host = (urlparse(line).hostname or "").lower()
+            if not host:
+                continue
+            # A private address like 10.0.0.1 or 192.168.1.1 is a different machine on every network
+            if is_ip_address(host):
+                if ipaddress.ip_address(host).is_private:
+                    continue
+                hosts.add(host)
+                continue
             domain_parts = extract_domain_parts(line)
             registered = f"{domain_parts.domain}.{domain_parts.suffix}".lower()
             # On shared services one bad page doesn't make every page on that host bad
@@ -270,7 +322,8 @@ def load_phishing_feed() -> tuple[set, set]:
     return links, hosts
 
 
-PHISHING_LINKS, PHISHING_HOSTS = load_phishing_feed()
+PHISHING_LINKS, PHISHING_HOSTS = load_feed("openphish_feed.txt")
+MALWARE_LINKS, MALWARE_HOSTS = load_feed("urlhaus_feed.txt")
 
 
 # =====================================================
@@ -382,9 +435,7 @@ def analyze_url(raw_url: str) -> dict:
 
     # Check 2: brand or login words on a free hosting service (e.g. a fake SBI form on Google Sites)
     full_path_and_query = (parsed.path + " " + parsed.query).lower()
-    # True if the host is a free host or a site under one, e.g. "mysite.pages.dev"
-    is_free_host = any(host == free_host or host.endswith("." + free_host) for free_host in FREE_HOSTS)
-    if is_free_host:
+    if on_free_host(host):
         suspicious_path_tokens = []
         for brand in BRANDS:
             if re.search(rf"\b{re.escape(brand)}\b", full_path_and_query):
@@ -420,7 +471,8 @@ def analyze_url(raw_url: str) -> dict:
             "advice": "The real destination is the second website, not the trusted one at the start. Don't open it."
         })
 
-    # Check 4: listed in the offline OpenPhish snapshot (a FACT about the list, not about the site today)
+    # Check 4: listed in an offline OpenPhish or URLhaus snapshot (a FACT about the list, not about the site today).
+    # Both lists share one check id, so two lists agreeing still counts as one piece of evidence for D5.
     if url_key(url) in PHISHING_LINKS or host in PHISHING_HOSTS:
         signals.append({
             "kind": "FACT",
@@ -429,6 +481,15 @@ def analyze_url(raw_url: str) -> dict:
             "evidence": host,
             "points": 60,
             "advice": "Don't open it. Report it at cybercrime.gov.in or call 1930."
+        })
+    elif url_key(url) in MALWARE_LINKS or host in MALWARE_HOSTS:
+        signals.append({
+            "kind": "FACT",
+            "check": "known_phishing",
+            "title": f"Listed as a malware download site in the URLhaus feed (snapshot of {URLHAUS_DATE})",
+            "evidence": host,
+            "points": 60,
+            "advice": "Don't open it or install anything from it. Report it at cybercrime.gov.in or call 1930."
         })
 
     # Check 5: a numeric IP address instead of a name
@@ -470,10 +531,10 @@ def analyze_url(raw_url: str) -> dict:
         signals.append({
             "kind": "FACT",
             "check": "punycode_lookalike",
-            "title": "Uses internationalized (Punycode) or lookalike characters",
+            "title": "The website name uses letters from another alphabet, or their punycode (xn--) form",
             "evidence": punycode_host,
             "points": 30,
-            "advice": "This domain uses lookalike characters (homoglyphs) to impersonate a legitimate service."
+            "advice": "Letters from other alphabets can look exactly like English ones. Type the address of the site you expect yourself."
         })
 
     # Check 9: an ending often used in scams (.xyz, .top, ...)
@@ -592,17 +653,21 @@ def analyze_url(raw_url: str) -> dict:
                     })
                     break
 
-    # 13c. One letter away from a brand of 5+ letters, e.g. "paytn" for "paytm"
+    # 13c. One letter away from a brand of 5+ letters. A lookalike typo ("paytn", "amzaon") counts more,
+    #      because real names one letter from a brand, like "kodak" (Kotak), are usually not lookalikes
     if not brand_flagged and not is_official:
         for brand, official_domains in BRANDS.items():
-            if len(brand) >= 5 and one_edit_apart(normalized_ext_domain, brand):
+            if len(brand) < 5:
+                continue
+            lookalike = lookalike_typo(normalized_ext_domain, brand)
+            if lookalike or one_edit_apart(normalized_ext_domain, brand):
                 primary_official = official_domains[0] if official_domains else f"{brand}.com"
                 signals.append({
                     "kind": "HEURISTIC",
                     "check": "typosquatting",
                     "title": f"Looks like a deceptive spelling or typo of '{brand.upper()}'",
                     "evidence": domain_parts.domain,
-                    "points": 25,
+                    "points": 30 if lookalike else 25,
                     "advice": f"Type the official site {primary_official} directly into your address bar."
                 })
                 break
@@ -818,8 +883,8 @@ def analyze_page_links(links: list, limit: int) -> list:
 def find_links(text: str) -> list:
     """Find everything in a message that looks like a link."""
     links = []
-    # Either a link starting with http(s):// or www., or a bare name like "sbi-kyc.xyz" with an optional /path
-    pattern = r"(?:https?://|www\.)[^\s<>'\"]+|[a-zA-Z0-9][-a-zA-Z0-9]*\.(?:com|org|in|net|xyz|top|click|co|ly|edu|gov|live|icu|io)(?:/[^\s<>'\"]*)?"
+    # Either a link starting with http(s):// or www., or a bare name like "login.sbi-kyc.xyz" with an optional /path
+    pattern = r"(?:https?://|www\.)[^\s<>'\"]+|(?:[a-zA-Z0-9][-a-zA-Z0-9]*\.)+(?:com|org|in|net|xyz|top|click|co|ly|edu|gov|live|icu|io)\b(?:/[^\s<>'\"]*)?"
 
     for match in re.finditer(pattern, text, re.IGNORECASE):
         candidate = match.group(0).strip(".,!?()\"';:<>")
@@ -827,6 +892,18 @@ def find_links(text: str) -> list:
             links.append(candidate)
 
     return links
+
+
+def brands_named_in(text: str) -> list:
+    """Brands a message mentions, as one word ("SBI") or two words written together ("India Post")."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    candidates = words + [first + second for first, second in pairwise(words)]
+    named = []
+    for word in candidates:
+        brand = BRAND_NAMES.get(word)
+        if brand and brand not in named:
+            named.append(brand)
+    return named
 
 
 def analyze_text(text: str) -> dict:
@@ -920,9 +997,11 @@ def analyze_text(text: str) -> dict:
     extracted_links = find_links(original_input)
     max_link_score = 0
     max_link_level = "Low"
+    link_results = []    # kept for check 5
 
     for link in extracted_links:
         link_result = analyze_url(link)
+        link_results.append(link_result)
         max_link_score = max(max_link_score, link_result["score"])
 
         link_level = link_result["level"]
@@ -936,6 +1015,34 @@ def analyze_text(text: str) -> dict:
             copied = dict(signal)
             copied["title"] = f"[{link}] {copied['title']}"
             signals.append(copied)
+
+    # Check 5: the message names a brand, but its link goes to a site that brand doesn't own ("sender mismatch")
+    named_brands = brands_named_in(original_input)
+    for link_result in link_results:
+        if not named_brands:
+            break
+        # The link check already caught the link pretending to be a brand, e.g. "sbi-kyc.xyz"
+        if any(signal["check"] in ("unauthorized_brand_domain", "brand_token_spoof", "typosquatting") for signal in link_result["signals"]):
+            continue
+        destination = normalize_url(link_result["input"])[0]    # after unwrapping Google or Outlook redirect links
+        parts = extract_domain_parts(destination)
+        registered = f"{parts.domain}.{parts.suffix}".lower()
+        host = (urlparse(destination).hostname or "").lower()
+        # Fine: a .gov.in-style site, or any brand's official site that isn't a free host like sites.google.com
+        if parts.suffix in RESTRICTED_ENDINGS or (registered in OFFICIAL_DOMAINS and not on_free_host(host)):
+            continue
+        brand = named_brands[0]
+        primary_official = BRANDS[brand][0] if BRANDS.get(brand) else f"{brand}.com"
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "brand_link_mismatch",
+            "title": f"Mentions {brand.upper()}, but its link goes to {registered}, which isn't one of {brand.upper()}'s sites",
+            "evidence": f"{brand.upper()} -> {host}",
+            # Asking you to verify or log in on that link is the classic phishing SMS, so it counts more
+            "points": 30 if re.search(ACTION_WORDS, text_lower) else 20,
+            "advice": f"Don't use the link. Open the official {brand.upper()} app, or type {primary_official} yourself."
+        })
+        break
 
     # Score = the riskiest link's score + the message's own points (copied link signals start with "[")
     text_only_points = sum(signal["points"] for signal in signals if not signal["title"].startswith("["))
@@ -973,6 +1080,14 @@ def refang_url(text: str) -> str:
     return text
 
 
+def analyze_example(row: dict) -> dict:
+    """Check one row of examples.csv with the checker for its channel: url, upi or message."""
+    clean_input = refang_url(row.get("input", "").strip())
+    if row.get("channel", "").strip().lower() in ("url", "upi"):
+        return analyze_url(clean_input)    # analyze_url passes upi:// on to analyze_upi
+    return analyze_text(clean_input)
+
+
 def load_examples() -> list:
     """Read data/examples.csv as a list of rows (used by the Examples page)."""
     csv_path = DATA_DIR / "examples.csv"
@@ -1007,14 +1122,8 @@ def evaluate_examples() -> dict:
     for row in load_examples():
         total += 1
         label = row.get("label", "").strip().lower()
-        channel = row.get("channel", "").strip().lower()
         raw_input = row.get("input", "").strip()
-
-        clean_input = refang_url(raw_input)
-        if channel == "url":
-            result = analyze_url(clean_input)
-        else:
-            result = analyze_text(clean_input)
+        result = analyze_example(row)
 
         # Everything the Evaluation page shows about a wrong answer
         record = {

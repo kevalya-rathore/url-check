@@ -85,7 +85,7 @@ def show_page_results(results):
 st.title("Aegis :violet[Guard]", anchor=False, text_alignment="center")    # "violet" is Athena Gold in our theme
 st.markdown("#### Stop the scam before the click", text_alignment="center")
 with st.container(horizontal=True, horizontal_alignment="center"):    # a centred row of trust badges
-    st.badge("Works offline", icon=":material/wifi_off:", color="gray")
+    st.badge("No outside lookups", icon=":material/cloud_off:", color="gray")
     st.badge("Never opens your link", icon=":material/visibility_off:", color="gray")
     st.badge("Explains every warning", icon=":material/info:", color="gray")
 
@@ -101,7 +101,8 @@ with st.form("input", clear_on_submit=False):
     if mode == "Link":
         text = st.text_input("Link to check", placeholder="e.g. sbi.co.in or upi://pay?pa=...").strip()
     elif mode == "Message":
-        text = st.text_area("Message to check", placeholder="Paste the SMS or WhatsApp message here").strip()
+        text = st.text_area("Message to check", placeholder="Paste the SMS or WhatsApp message here",
+                            help="Remove OTPs, PINs and account numbers first: the checks only need the wording and the links.").strip()
     else:
         text = ""
         image = st.file_uploader("Picture of the QR code", type=["png", "jpg", "jpeg", "webp"])
@@ -169,7 +170,7 @@ elif result is None:
         st.caption("A link, message or QR code you received by SMS, WhatsApp or email.")
     with check_col.container(border=True):
         st.markdown(":material/manage_search: **2. We check**")
-        st.caption("14 link checks, 4 message checks and 5 UPI payment checks, run offline in under a second.")
+        st.caption("14 link checks, 5 message checks and 5 UPI payment checks, run offline in under a second.")
     with verdict_col.container(border=True):
         st.markdown(":material/task_alt: **3. Get a clear verdict**")
         st.caption("How risky it is, the reasons behind it, and safe next steps.")
