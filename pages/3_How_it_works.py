@@ -275,7 +275,7 @@ with st.expander("Read our known limitations and design boundaries", expanded=Fa
           clean, normal domain without suspicious keywords or unusual endings will be classified as **Low**.
         - **Compromised authentic sites:** If an official, legitimate website is hacked or compromised, 
           it will still match our verified whitelist or look clean to structural checks.
-        - **Curated brand list:** About 60 Indian and international brands (banks, UPI apps, shopping, delivery,
+        - **Curated brand list:** About 130 Indian and international brands (banks, UPI apps, shopping, delivery,
           government services, telecom, utilities), plus every bank on the RBI-only .bank.in domain.
           Impersonation of organizations outside this list relies on the general checks.
         - **Typo detection trade-offs:** Spelling-similarity checks can occasionally flag ordinary words 
