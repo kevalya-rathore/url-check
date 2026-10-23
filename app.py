@@ -4,27 +4,28 @@ import streamlit as st
 
 from logic import process
 
-st.set_page_config(page_title="APP NAME", page_icon="🚀")
-st.title("APP NAME")
-st.caption("One sentence: who this is for and what it does.")
+st.set_page_config(page_title="Aegis Guard", page_icon="🚀")
+st.title("Aegis Guard")
+st.caption("Enter a URL to check safety rating")
 
-if "items" not in st.session_state:
-    st.session_state["items"] = []
+if "result" not in st.session_state:
+    st.session_state["result"] = []
 
-with st.form("input", clear_on_submit=True):
-    text = st.text_input("Input").strip()
+with st.form("input", clear_on_submit=False):
+    text = st.text_input("URL").strip()
     submitted = st.form_submit_button("Submit")
 
 # PART 1: actions, only on the run where the button was clicked
 if submitted:
     if not text:
         st.error("Input can't be empty.")
+    elif len(text) > 2000:
+        st.error("Input can't be more than 2000 characters")
     else:
-        st.session_state["items"].append(process(text))
-        st.success("Added.")
+        st.session_state["result"]
 
 # PART 2: display, on every rerun, read from session_state
 if not st.session_state["items"]:
     st.info("Nothing yet.")
 else:
-    st.dataframe(st.session_state["items"])
+    st.dataframe(st.session_state["result"])
