@@ -21,17 +21,27 @@ Result shape:
         ],
         "next_steps": [str, ...]
     }
+
+How this file is organised:
+    1. Settings      word lists, the brand list (data/brands.json), lookalike letters
+    2. Helpers       small functions the checks use; 2b loads the phishing list; 2c turns points into a level
+    3. analyze_url   runs 13 checks on one link
+    4. analyze_text  checks a message, then runs analyze_url on every link inside it
+    5. Evaluation    runs data/examples.csv through the analyzer for the Evaluation page
+
+Every check that finds something adds a "signal" (one warning sign) worth some points.
+The points are added up into a score, and the score becomes a level: Low, Caution or High.
 """
 
 import csv
 import json
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Set, Tuple
 from urllib.parse import unquote, urlparse
 
 import tldextract
-# suffix_list_urls=() makes tldextract use its bundled snapshot and never download (Section 1).
+# tldextract splits a website name into parts. suffix_list_urls=() makes it use its built-in
+# list of endings and never download one; extra_suffixes teaches it the new ".bank.in" ending.
 _EXTRACTOR = tldextract.TLDExtract(cache_dir=False, suffix_list_urls=(), extra_suffixes=["bank.in"])
 
 # Folder that holds brands.json, the phishing feed and examples.csv
@@ -41,7 +51,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 # 1. SETTINGS & BRAND DATA
 # =====================================================
 
-def load_brands() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+def load_brands() -> tuple[dict, dict]:
     """
     Load brand -> official domains from data/brands.json.
     Returns (brand_to_domains, official_domain_to_brand).
@@ -51,53 +61,60 @@ def load_brands() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
         brand_map = json.load(f)
 
     # Reverse lookup for registered official domains
-    official_domains: Dict[str, str] = {}
+    official_domains = {}
     for brand, domains in brand_map.items():
-        for dom in domains:
-            official_domains[dom.lower()] = brand
+        for domain in domains:
+            official_domains[domain.lower()] = brand
 
     return brand_map, official_domains
 
 
 BRANDS, OFFICIAL_DOMAINS = load_brands()
 
-BAD_ENDINGS: Set[str] = {
+# Score cut-offs: below 30 is Low, 30 to 59 is Caution, 60 and above can be High
+CAUTION_SCORE = 30
+HIGH_SCORE = 60
+
+# Links longer than this many characters count as "unusually long"
+LONG_LINK_LENGTH = 75
+
+BAD_ENDINGS = {
     "xyz", "top", "click", "buzz", "tk", "ml", "ga", "cf",
     "live", "icu", "work", "loan", "fit", "rest", "surf", "monster"
 }
 
-SHORTENERS: Set[str] = {
+SHORTENERS = {
     "bit.ly", "tinyurl.com", "t.co", "goo.gl", "cutt.ly",
     "is.gd", "rb.gy", "shorturl.at", "tiny.cc", "ow.ly"
 }
 
-FREE_HOSTS: Set[str] = {
+FREE_HOSTS = {
     "sites.google.com", "docs.google.com", "forms.google.com",
     "drive.google.com", "firebaseapp.com", "web.app", "github.io",
     "pages.dev", "weebly.com", "wixsite.com", "blogspot.com",
     "amazonaws.com", "googleapis.com"
 }
 
-PHISH_WORDS: List[str] = [
+PHISH_WORDS = [
     "login", "verify", "secure", "update", "kyc", "account",
     "confirm", "banking", "wallet", "reward", "bonus", "claim",
     "credential", "password", "authenticate", "pan"
 ]
 
-URGENT_WORDS: List[str] = [
+URGENT_WORDS = [
     "urgent", "suspended", "expire", "expired", "blocked",
     "last chance", "act now", "action required", "immediately", "immediate",
     "penalty", "challan", "disconnect", "electricity cutoff", "power cutoff",
     "digital arrest", "customs", "arrest warrant", "deactivation"
 ]
 
-SECRET_WORDS: List[str] = [
+SECRET_WORDS = [
     "otp", "pin", "cvv", "password", "card number", "upi pin", "passcode"
 ]
 
 # Lookalike characters mapped to the Latin letter they imitate,
 # e.g. Cyrillic "\u0430" looks exactly like Latin "a", and "0" is often used for "o"
-HOMOGLYPH_MAP: Dict[str, str] = {
+HOMOGLYPH_MAP = {
     "\u0430": "a", "\u0441": "c", "\u0435": "e", "\u043e": "o",
     "\u0440": "p", "\u0455": "s", "\u0456": "i", "\u0458": "j",
     "\u0443": "y", "\u0445": "x", "\u045d": "i", "\u0406": "i",
@@ -111,8 +128,8 @@ HOMOGLYPH_MAP: Dict[str, str] = {
 # 2. STRING & DOMAIN UTILITIES
 # =====================================================
 
-def normalize_url(url: str) -> Tuple[str, bool]:
-    """Ensure URL has a scheme for parsing. Returns (normalized_url, had_explicit_scheme)."""
+def normalize_url(url: str) -> tuple[str, bool]:
+    """Add "http://" if the link has none, so Python can split it into parts. Returns (link, did_the_user_type_it)."""
     url = url.strip()
     has_scheme = url.startswith("http://") or url.startswith("https://")
     if has_scheme:
@@ -121,7 +138,7 @@ def normalize_url(url: str) -> Tuple[str, bool]:
 
 
 def is_ip_address(host: str) -> bool:
-    """Return True if host is a numeric IPv4 address."""
+    """True if the host is a number address like 192.168.1.1 instead of a name."""
     clean_host = host.split(":")[0].strip("[]")
     parts = clean_host.split(".")
     if len(parts) != 4:
@@ -136,8 +153,12 @@ def is_ip_address(host: str) -> bool:
 
 
 def count_digits(text: str) -> int:
-    """Count numeric digits in a string."""
-    return sum(1 for ch in text if ch.isdigit())
+    """How many digits (0-9) are in the text."""
+    count = 0
+    for char in text:
+        if char.isdigit():
+            count += 1
+    return count
 
 
 def one_edit_apart(a: str, b: str) -> bool:
@@ -152,12 +173,12 @@ def one_edit_apart(a: str, b: str) -> bool:
 
 
 def normalize_visual_lookalikes(text: str) -> str:
-    """Normalize common unicode homoglyphs and leetspeak substitutions to Latin."""
+    """Replace lookalike letters with the Latin letter they imitate, e.g. "g00gle" -> "google", "rn" -> "m"."""
     lower_text = text.lower()
     lower_text = lower_text.replace("rn", "m").replace("vv", "w")
     result = []
-    for ch in lower_text:
-        result.append(HOMOGLYPH_MAP.get(ch, ch))
+    for char in lower_text:
+        result.append(HOMOGLYPH_MAP.get(char, char))    # keep the letter if it isn't in the map
     return "".join(result)
 
 
@@ -166,9 +187,9 @@ def extract_domain_parts(url: str):
     return _EXTRACTOR(url)
 
 
-def detect_punycode_or_unicode(host: str) -> Tuple[bool, str]:
-    """Detect non-ASCII characters or Punycode encoding in host."""
-    has_non_ascii = any(ord(c) > 127 for c in host)
+def detect_punycode_or_unicode(host: str) -> tuple[bool, str]:
+    """Does the host use non-Latin letters or punycode ("xn--")? Returns (yes/no, the host in punycode form)."""
+    has_non_ascii = any(ord(char) > 127 for char in host)    # characters above 127 aren't plain English letters
     has_punycode = "xn--" in host.lower()
 
     puny_host = host
@@ -188,7 +209,7 @@ def detect_punycode_or_unicode(host: str) -> Tuple[bool, str]:
 FEED_DATE = "23 Oct 2026"
 
 # Services where one host serves many different people's files
-SHARED_STORAGE: Set[str] = {"backblazeb2.com", "contabostorage.com", "googleapis.com", "dropbox.com"}
+SHARED_STORAGE = {"backblazeb2.com", "contabostorage.com", "googleapis.com", "dropbox.com"}
 
 
 def url_key(url: str) -> str:
@@ -197,11 +218,11 @@ def url_key(url: str) -> str:
     return ((parsed.hostname or "") + parsed.path).lower().rstrip("/")
 
 
-def load_phishing_feed() -> Tuple[Set[str], Set[str]]:
+def load_phishing_feed() -> tuple[set, set]:
     """Read data/openphish_feed.txt into (exact links, whole hosts). Never opens any of the links."""
     feed_path = DATA_DIR / "openphish_feed.txt"
-    links: Set[str] = set()
-    hosts: Set[str] = set()
+    links = set()
+    hosts = set()
     with open(feed_path, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
@@ -209,8 +230,8 @@ def load_phishing_feed() -> Tuple[Set[str], Set[str]]:
                 continue
             links.add(url_key(line))
             host = (urlparse(line).hostname or "").lower()
-            ext = extract_domain_parts(line)
-            registered = f"{ext.domain}.{ext.suffix}".lower()
+            domain_parts = extract_domain_parts(line)
+            registered = f"{domain_parts.domain}.{domain_parts.suffix}".lower()
             # On shared services one bad page doesn't make every page on that host bad
             if host in FREE_HOSTS or registered in SHORTENERS or registered in SHARED_STORAGE or registered in OFFICIAL_DOMAINS:
                 continue
@@ -231,29 +252,29 @@ REPORT_STEPS = [
 ]
 
 
-def decide_level(score: int, signals: List[Dict[str, Any]]) -> str:
+def decide_level(score: int, signals: list) -> str:
     """
     Turn a 0-100 score into "Low", "Caution" or "High".
     High also needs real evidence: one strong FACT (20+ points) or warnings
     from at least two different checks, so a single guess can't make it High.
     """
-    if score < 30:
+    if score < CAUTION_SCORE:
         return "Low"
-    if score < 60:
+    if score < HIGH_SCORE:
         return "Caution"
-    strong_facts = [s for s in signals if s["kind"] == "FACT" and s["points"] >= 20]
-    checks_that_fired = set(s["check"] for s in signals if s["points"] > 0)
+    strong_facts = [signal for signal in signals if signal["kind"] == "FACT" and signal["points"] >= 20]
+    checks_that_fired = set(signal["check"] for signal in signals if signal["points"] > 0)
     if len(strong_facts) >= 1 or len(checks_that_fired) >= 2:
         return "High"
     return "Caution"
 
 
-def build_next_steps(signals: List[Dict[str, Any]], level: str, nothing_found_message: str) -> List[str]:
+def build_next_steps(signals: list, level: str, nothing_found_message: str) -> list:
     """Each signal's advice once, plus where to report it if High, or a default message if nothing was found."""
     next_steps = []
-    for s in signals:
-        if s["advice"] not in next_steps:
-            next_steps.append(s["advice"])
+    for signal in signals:
+        if signal["advice"] not in next_steps:
+            next_steps.append(signal["advice"])
     if level == "High":
         for step in REPORT_STEPS:
             if step not in next_steps:
@@ -267,7 +288,7 @@ def build_next_steps(signals: List[Dict[str, Any]], level: str, nothing_found_me
 # 3. URL ANALYSIS
 # =====================================================
 
-def analyze_url(raw_url: str) -> Dict[str, Any]:
+def analyze_url(raw_url: str) -> dict:
     """
     Check one link for phishing warning signs, without ever opening it.
     Returns the result dictionary described at the top of this file.
@@ -284,19 +305,19 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
 
     url, had_explicit_scheme = normalize_url(original_input)
     parsed = urlparse(url)
-    ext = extract_domain_parts(url)
+    domain_parts = extract_domain_parts(url)
 
     host = (parsed.hostname or "").lower()
     # The part someone actually registers, e.g. "sbi.co.in" for "login.sbi.co.in"
-    registered_domain = f"{ext.domain}.{ext.suffix}".lower() if ext.suffix else ext.domain.lower()
+    registered_domain = f"{domain_parts.domain}.{domain_parts.suffix}".lower() if domain_parts.suffix else domain_parts.domain.lower()
 
-    signals: List[Dict[str, Any]] = []
+    signals = []
 
     # Check 1: the domain is one of a brand's official sites (lowers the score)
     is_official = False
     official_brand_match = OFFICIAL_DOMAINS.get(registered_domain)
-    if official_brand_match is None and ext.suffix == "bank.in":
-        official_brand_match = ext.domain    # only RBI-verified banks can register .bank.in
+    if official_brand_match is None and domain_parts.suffix == "bank.in":
+        official_brand_match = domain_parts.domain    # only RBI-verified banks can register .bank.in
     if official_brand_match:
         is_official = True
         signals.append({
@@ -311,7 +332,7 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
     # Check 2: brand or login words on a free hosting service (e.g. a fake SBI form on Google Sites)
     full_path_and_query = (parsed.path + " " + parsed.query).lower()
     # True if the host is a free host or a site under one, e.g. "mysite.pages.dev"
-    is_free_host = any(host == fh or host.endswith("." + fh) for fh in FREE_HOSTS)
+    is_free_host = any(host == free_host or host.endswith("." + free_host) for free_host in FREE_HOSTS)
     if is_free_host:
         suspicious_path_tokens = []
         for brand in BRANDS:
@@ -393,27 +414,27 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
         })
 
     # Check 8: non-Latin lookalike letters or punycode ("xn--") in the website name
-    has_lookalike, puny_rep = detect_punycode_or_unicode(host)
+    has_lookalike, punycode_host = detect_punycode_or_unicode(host)
     if has_lookalike:
         signals.append({
             "kind": "FACT",
             "check": "punycode_lookalike",
             "title": "Uses internationalized (Punycode) or lookalike characters",
-            "evidence": puny_rep,
+            "evidence": punycode_host,
             "points": 30,
             "advice": "This domain uses lookalike characters (homoglyphs) to impersonate a legitimate service."
         })
 
     # Check 9: an ending often used in scams (.xyz, .top, ...)
-    last_suffix = ext.suffix.split(".")[-1].lower() if ext.suffix else ""
+    last_suffix = domain_parts.suffix.split(".")[-1].lower()    # e.g. "co.in" -> "in"
     if last_suffix in BAD_ENDINGS:
         signals.append({
             "kind": "HEURISTIC",
             "check": "risky_tld",
-            "title": f"Risky top-level domain ending: .{ext.suffix}",
-            "evidence": "." + ext.suffix,
+            "title": f"Risky top-level domain ending: .{domain_parts.suffix}",
+            "evidence": "." + domain_parts.suffix,
             "points": 20,
-            "advice": f"Be cautious of links ending in .{ext.suffix}, frequently used in low-cost scam campaigns."
+            "advice": f"Be cautious of links ending in .{domain_parts.suffix}, frequently used in low-cost scam campaigns."
         })
 
     # Check 10: a link shortener that hides the destination
@@ -428,7 +449,7 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
         })
 
     # Check 11: the shape of the link (very long, many subdomains, many hyphens or digits)
-    if len(url) > 75:
+    if len(url) > LONG_LINK_LENGTH:
         signals.append({
             "kind": "HEURISTIC",
             "check": "url_length",
@@ -438,30 +459,30 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
             "advice": "Inspect the address carefully for hidden parameters or obscured destinations."
         })
 
-    if ext.subdomain and ext.subdomain.count(".") >= 2:
+    if domain_parts.subdomain and domain_parts.subdomain.count(".") >= 2:
         signals.append({
             "kind": "HEURISTIC",
             "check": "excessive_subdomains",
             "title": "Excessive subdomains used to mimic authentic services",
-            "evidence": ext.subdomain,
+            "evidence": domain_parts.subdomain,
             "points": 15,
             "advice": "Check the rightmost registered domain name to identify who actually owns the site."
         })
 
-    if host.count("-") >= 2 or count_digits(ext.domain) >= 3:
+    if host.count("-") >= 2 or count_digits(domain_parts.domain) >= 3:
         signals.append({
             "kind": "HEURISTIC",
             "check": "hyphens_digits",
             "title": "Excessive hyphens or digits in domain name",
-            "evidence": ext.domain,
+            "evidence": domain_parts.domain,
             "points": 10,
             "advice": "Scammers frequently insert hyphens and numbers to create copycat domain names."
         })
 
     # Check 12: two or more phishing words in the path or subdomain
     # Split into words at / . - _ ? & =  e.g. "/kyc-update" -> "kyc", "update"
-    url_tokens = set(re.split(r"[/.\-_?&=]", parsed.path.lower() + " " + ext.subdomain.lower()))
-    found_phish_words = [pw for pw in PHISH_WORDS if pw in url_tokens]
+    url_tokens = set(re.split(r"[/.\-_?&=]", parsed.path.lower() + " " + domain_parts.subdomain.lower()))
+    found_phish_words = [word for word in PHISH_WORDS if word in url_tokens]
     if len(found_phish_words) >= 2:
         signals.append({
             "kind": "HEURISTIC",
@@ -474,7 +495,7 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
 
     # Check 13: pretending to be a brand (13a exact name, 13b name inside the host, 13c one-letter typo)
     # First undo punycode and lookalike letters, so "xn--pytm-53d" and "g00gle" compare like "paytm" and "google"
-    readable_domain = ext.domain
+    readable_domain = domain_parts.domain
     if readable_domain.startswith("xn--"):
         try:
             readable_domain = readable_domain.encode("ascii").decode("idna")
@@ -505,7 +526,7 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
     # 13b. A brand name appears as a word in the host, e.g. "sbi.co.in.verify-kyc.top"
     if not brand_flagged and not is_official:
         for brand in BRANDS:
-            if brand in host_labels and ext.domain != brand:
+            if brand in host_labels and domain_parts.domain != brand:
                 official_domains = BRANDS.get(brand, [])
                 if registered_domain not in official_domains:
                     brand_flagged = True
@@ -529,18 +550,18 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
                     "kind": "HEURISTIC",
                     "check": "typosquatting",
                     "title": f"Looks like a deceptive spelling or typo of '{brand.upper()}'",
-                    "evidence": ext.domain,
+                    "evidence": domain_parts.domain,
                     "points": 25,
                     "advice": f"Type the official site {primary_official} directly into your address bar."
                 })
                 break
 
     # No trusted-site credit when the trusted site is only carrying someone else's content
-    if any(s["check"] in ("hosting_abuse", "open_redirect", "known_phishing") for s in signals):
-        signals = [s for s in signals if s["check"] != "official_domain"]
+    if any(signal["check"] in ("hosting_abuse", "open_redirect", "known_phishing") for signal in signals):
+        signals = [signal for signal in signals if signal["check"] != "official_domain"]
 
     # Add up the points and keep the score between 0 and 100
-    score = max(0, min(100, sum(s["points"] for s in signals)))
+    score = max(0, min(100, sum(signal["points"] for signal in signals)))
     level = decide_level(score, signals)
     next_steps = build_next_steps(
         signals, level,
@@ -560,9 +581,9 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
 # 4. MESSAGE ANALYSIS (SMS / WhatsApp)
 # =====================================================
 
-def find_links(text: str) -> List[str]:
-    """Extract web links from text message accurately without substring collisions."""
-    links: List[str] = []
+def find_links(text: str) -> list:
+    """Find everything in a message that looks like a link."""
+    links = []
     # Either a link starting with http(s):// or www., or a bare name like "sbi-kyc.xyz" with an optional /path
     pattern = r"(?:https?://|www\.)[^\s<>'\"]+|[a-zA-Z0-9][-a-zA-Z0-9]*\.(?:com|org|in|net|xyz|top|click|co|ly|edu|gov|live|icu|io)(?:/[^\s<>'\"]*)?"
 
@@ -574,7 +595,7 @@ def find_links(text: str) -> List[str]:
     return links
 
 
-def analyze_text(text: str) -> Dict[str, Any]:
+def analyze_text(text: str) -> dict:
     """
     Check a message for pressure tactics, requests for secrets, and dangerous links.
     Every link inside is checked with analyze_url; a message is never rated safer than its riskiest link.
@@ -589,7 +610,7 @@ def analyze_text(text: str) -> Dict[str, Any]:
             "next_steps": ["Enter a message to analyze."]
         }
 
-    signals: List[Dict[str, Any]] = []
+    signals = []
     text_lower = original_input.lower()
 
     # Check 1: urgency or threat words (whole words only, so "blocked" doesn't match inside other words)
@@ -612,7 +633,7 @@ def analyze_text(text: str) -> Dict[str, Any]:
 
     # Check 2: asks for a secret, unless the sentence says NOT to share it
     # A request word, then up to 30 characters, then a secret word: e.g. "share the OTP", "enter your PIN"
-    secret_words = "|".join(re.escape(w) for w in SECRET_WORDS)
+    secret_words = "|".join(re.escape(word) for word in SECRET_WORDS)
     request_pattern = r"\b(?:share|send|enter|tell|give|provide|reply with)\b[^.\n]{0,30}?\b(?:" + secret_words + r")\b"
     asked_secrets = []
     for match in re.finditer(request_pattern, text_lower):
@@ -660,23 +681,23 @@ def analyze_text(text: str) -> Dict[str, Any]:
     max_link_level = "Low"
 
     for link in extracted_links:
-        link_res = analyze_url(link)
-        max_link_score = max(max_link_score, link_res.get("score", 0))
+        link_result = analyze_url(link)
+        max_link_score = max(max_link_score, link_result["score"])
 
-        link_level = link_res.get("level", "Low")
+        link_level = link_result["level"]
         if link_level == "High":
             max_link_level = "High"
         elif link_level == "Caution" and max_link_level != "High":
             max_link_level = "Caution"
 
         # Copy the link's signals into the message result, labelled with the link they came from
-        for s in link_res.get("signals", []):
-            copied = dict(s)
+        for signal in link_result["signals"]:
+            copied = dict(signal)
             copied["title"] = f"[{link}] {copied['title']}"
             signals.append(copied)
 
     # Score = the riskiest link's score + the message's own points (copied link signals start with "[")
-    text_only_points = sum(s["points"] for s in signals if not s["title"].startswith("["))
+    text_only_points = sum(signal["points"] for signal in signals if not signal["title"].startswith("["))
     combined_score = max(0, min(100, max_link_score + max(0, text_only_points)))
     level = decide_level(combined_score, signals)
 
@@ -711,7 +732,7 @@ def refang_url(text: str) -> str:
     return text
 
 
-def load_examples() -> List[Dict[str, str]]:
+def load_examples() -> list:
     """Read data/examples.csv as a list of rows (used by the Examples page)."""
     csv_path = DATA_DIR / "examples.csv"
     if not csv_path.exists():
@@ -720,7 +741,7 @@ def load_examples() -> List[Dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def evaluate_examples() -> Dict[str, Any]:
+def evaluate_examples() -> dict:
     """
     Run every example in data/examples.csv through the analyzer and count the results.
     Benign examples must come out Low; suspicious ones must come out Caution or High.
@@ -761,7 +782,7 @@ def evaluate_examples() -> Dict[str, Any]:
             "predicted_level": result["level"],
             "score": result["score"],
             "why": row.get("why", "").strip(),
-            "signals": [s["title"] for s in result["signals"]]
+            "signals": [signal["title"] for signal in result["signals"]]
         }
 
         if label == "benign":
