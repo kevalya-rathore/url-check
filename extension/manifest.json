@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Aegis Guard",
+  "version": "1.0",
+  "description": "Right-click a link or a selected message to check it with Aegis Guard before you open it.",
+  "permissions": ["contextMenus"],
+  "background": { "service_worker": "background.js" }
+}

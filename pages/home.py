@@ -77,6 +77,14 @@ with st.form("input", clear_on_submit=False):
         image = st.file_uploader("Picture of the QR code", type=["png", "jpg", "jpeg", "webp"])
     submitted = st.form_submit_button("Check for warning signs", type="primary", icon=":material/search:", width="stretch")
 
+# A link or message sent by the browser extension arrives in the address, e.g. ?url=... or ?text=...
+params = st.query_params
+if not submitted and ("url" in params or "text" in params):
+    mode = "Link" if "url" in params else "Message"
+    text = params.get("url", params.get("text", "")).strip()
+    submitted = True
+    st.query_params.clear()    # check it once; later clicks on the page shouldn't check it again
+
 # PART 1: actions, only on the run where the button was clicked
 if submitted and mode == "QR code":
     if image is None:
