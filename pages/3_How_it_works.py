@@ -102,8 +102,14 @@ st.markdown(
 
 checks_data = [
     {
+        "Check": "Known phishing site",
+        "What it looks for": "The link or website appears in our offline snapshot of the OpenPhish feed",
+        "Kind": "FACT",
+        "Points": "+60"
+    },
+    {
         "Check": "Official domain",
-        "What it looks for": "Domain is on our list of a brand's official sites (no credit when that site only hosts someone else's page or redirect)",
+        "What it looks for": "Domain is on our list of a brand's official sites, or is a .bank.in bank (no credit when that site only hosts someone else's page or redirect)",
         "Kind": "FACT",
         "Points": "−35"
     },
@@ -269,13 +275,15 @@ with st.expander("Read our known limitations and design boundaries", expanded=Fa
           clean, normal domain without suspicious keywords or unusual endings will be classified as **Low**.
         - **Compromised authentic sites:** If an official, legitimate website is hacked or compromised, 
           it will still match our verified whitelist or look clean to structural checks.
-        - **Curated brand dictionary:** Our offline database covers 18 major Indian and international brands 
-          (such as SBI, HDFC, ICICI, Paytm, PhonePe, India Post, UIDAI, Income Tax, IRCTC, Amazon, etc.). 
-          Impersonation of organizations outside this list relies entirely on generic heuristic checks.
+        - **Curated brand list:** About 60 Indian and international brands (banks, UPI apps, shopping, delivery,
+          government services, telecom, utilities), plus every bank on the RBI-only .bank.in domain.
+          Impersonation of organizations outside this list relies on the general checks.
         - **Typo detection trade-offs:** Spelling-similarity checks can occasionally flag ordinary words 
           that happen to look similar to a brand name.
         - **Short brand names:** One-letter typos of 3–4 letter brands (for example sbl for SBI) are not
           flagged, because at that length too many ordinary words differ by just one letter.
+        - **The phishing list ages quickly:** Phishing sites often live only hours, so an offline snapshot misses
+          newer ones. That's why the structural checks stay the main defence.
         - **Language support:** Message analysis currently checks English keywords and patterns only.
         - **Probabilistic nature of heuristics:** Heuristics can produce both false alarms and misses. 
           Our measured benchmark accuracy, false alarms, and misses are published on the **Evaluation** page.
@@ -298,6 +306,7 @@ with col_built:
         - **Labelled test cases:** Synthetic examples of safe and phishing links and messages on the **Examples** page.
         - **Evaluation benchmark:** Automated accuracy and false-alarm testing on the **Evaluation** page.
         - **Offline analysis:** No network calls during a scan; nothing you paste is sent anywhere.
+        - **Known phishing list:** Offline snapshot of the OpenPhish community feed (23 Oct 2026), used non-commercially. A link that isn't on the list is not automatically safe.
         """
     )
 
