@@ -69,7 +69,7 @@ with st.container(border=True):
         """
 - **A curated brand list can't cover every country site.** Amazon's real German site (amazon.de) isn't in
   our list, so it looks like "Amazon on the wrong domain".
-- **Typo detection is a trade-off.** Scoring one-letter typos higher would catch paytn.com, but would also
+- **Typo detection is a trade-off.** Treating one-letter typos as more serious would catch paytn.com, but would also
   flag real names like kodak.com (one letter from Kotak). We chose fewer false alarms.
 - **Some scams have no tell-tale words.** "Hi Mom, this is my new number, please send money" uses ordinary
   language, so keyword checks can't catch it. That needs a different kind of check.

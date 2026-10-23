@@ -32,7 +32,7 @@ def show_signal(signal):
         st.code(signal["evidence"], language=None)
 
 
-st.title("🛡️ Aegis Guard", anchor=False, text_alignment="center")
+st.title("Aegis :violet[Guard]", anchor=False, text_alignment="center")    # "violet" is Athena Gold in our theme
 st.markdown("#### Stop the scam before the click", text_alignment="center")
 with st.container(horizontal=True, horizontal_alignment="center"):    # a centred row of trust badges
     st.badge("Works offline", icon=":material/wifi_off:", color="gray")
@@ -81,7 +81,7 @@ if result is None:
         st.markdown(":material/manage_search: **2. We check**")
         st.caption("13 link checks and 4 message checks, run offline in under a second.")
     with verdict_col.container(border=True):
-        st.markdown(":material/task_alt: **3. We give a clear verdict**")
+        st.markdown(":material/task_alt: **3. Get a clear verdict**")
         st.caption("How risky it is, the reasons behind it, and safe next steps.")
     st.page_link("pages/examples.py", label="Browse some examples of malicious links", icon=":material/list_alt:")
 else:

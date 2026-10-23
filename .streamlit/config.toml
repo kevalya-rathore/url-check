@@ -1,21 +1,42 @@
-# Shared look for every page: a deep navy dark theme with one teal accent colour
+# Shared look for every page, from the AEGIS palette: Midnight Navy + Cyber Cyan + Athena Gold
 [theme]
 base = "dark"
-# Teal-600: readable as white button text, and still visible against the dark background
-primaryColor = "#0D9488"
-backgroundColor = "#0B1220"            # deep navy instead of plain black
-secondaryBackgroundColor = "#131C2E"   # inputs and widgets, one step lighter
-textColor = "#E6EDF3"
-borderColor = "#24304A"
-codeBackgroundColor = "#0F1829"
-linkColor = "#2DD4BF"
-# Rounded cards and pill-shaped buttons
+primaryColor = "#22D3EE"               # Cyber Cyan: buttons, active elements, the threat meter
+backgroundColor = "#0B1120"            # Midnight Navy: page background
+secondaryBackgroundColor = "#24344D"   # Elevated Slate: input fields and widgets
+codeBackgroundColor = "#152238"        # Deep Slate: panels (the evidence boxes)
+textColor = "#F1F5F9"                  # Frost White
+borderColor = "#334155"                # Border Slate
+linkColor = "#22D3EE"
 baseRadius = "large"
 buttonRadius = "full"
 showWidgetBorder = true
 # Inter is loaded from Google Fonts; without internet the browser falls back to its normal sans-serif font
 font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap"
 headingFontWeights = [700, 600, 600, 600, 600, 600]
+
+# Security status colours. Each "...BackgroundColor" is the status colour at 20% over Midnight Navy.
+redColor = "#FB7185"                   # Coral Red: high risk
+redTextColor = "#FB7185"
+redBackgroundColor = "#3B2434"
+yellowColor = "#FBBF24"                # Amber: caution (used by warning boxes)
+yellowTextColor = "#FBBF24"
+yellowBackgroundColor = "#3B3421"
+orangeColor = "#FBBF24"                # Amber as well, for "Moderate" badges
+orangeTextColor = "#FBBF24"
+orangeBackgroundColor = "#3B3421"
+greenColor = "#34D399"                 # Emerald: low risk
+greenTextColor = "#34D399"
+greenBackgroundColor = "#133838"
+grayColor = "#94A3B8"                  # Muted Slate: neutral and "not checked"
+grayTextColor = "#94A3B8"
+grayBackgroundColor = "#262E3E"
+blueColor = "#22D3EE"                  # Cyber Cyan: FACT badges and info boxes
+blueTextColor = "#22D3EE"
+blueBackgroundColor = "#103849"
+violetColor = "#D8AD60"                # Athena Gold: HEURISTIC badges and brand highlights
+violetTextColor = "#D8AD60"
+violetBackgroundColor = "#34302D"
 
 [client]
 # Hide the developer menu so the demo looks like a finished app

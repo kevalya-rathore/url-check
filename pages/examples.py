@@ -64,4 +64,4 @@ with suspicious_tab:
 with benign_tab:
     show_examples(benign, "benign")
 
-st.page_link("pages/evaluation.py", label="See how Aegis Guard scores on all of them", icon=":material/insights:")
+st.page_link("pages/evaluation.py", label="See how Aegis Guard performs on all of them", icon=":material/insights:")

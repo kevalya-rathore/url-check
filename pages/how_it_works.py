@@ -1,8 +1,8 @@
-# How it works page: a plain-language explanation of the checks, the scoring, and the limits.
+# How it works page: a plain-language explanation of the checks, how verdicts are reached, and the limits.
 import streamlit as st
 
 st.title("How it works", anchor=False, text_alignment="center")
-st.markdown("#### What Aegis Guard checks, how it scores, and what it can't do", text_alignment="center")
+st.markdown("#### What Aegis Guard checks, how it decides, and what it can't do", text_alignment="center")
 with st.container(horizontal=True, horizontal_alignment="center"):
     st.badge("FACT = verifiable", icon=":material/verified:", color="blue")
     st.badge("HEURISTIC = educated guess", icon=":material/lightbulb:", color="violet")
@@ -90,10 +90,10 @@ st.info(
 # -----------------------------------------------------------------------------
 # 4. THE CHECKS
 # -----------------------------------------------------------------------------
-st.header("4. The checks and scoring signals", anchor=False)
+st.header("4. The checks", anchor=False)
 st.markdown(
     "Below are the security checks evaluated by our offline detection engine, "
-    "along with their classification and risk point values:"
+    "whether each one is a fact or a heuristic, and how serious a warning it is:"
 )
 
 checks_data = [
@@ -101,127 +101,127 @@ checks_data = [
         "Check": "Known phishing site",
         "What it looks for": "The link or website appears in our offline snapshot of the OpenPhish feed",
         "Kind": "FACT",
-        "Points": "+60"
+        "Severity": "Severe"
     },
     {
         "Check": "Official domain",
         "What it looks for": "Domain is on our list of a brand's official sites, or is a .bank.in bank (no credit when that site only hosts someone else's page or redirect)",
         "Kind": "FACT",
-        "Points": "−35"
+        "Severity": "Reassuring"
     },
     {
         "Check": "Brand on wrong domain",
         "What it looks for": "Brand name, or a longer form from its own domains like hdfcbank, used on a domain that isn't one of its official sites (e.g. sbi on .xyz)",
         "Kind": "HEURISTIC",
-        "Points": "+40"
+        "Severity": "Severe"
     },
     {
         "Check": "Asks for a secret",
         "What it looks for": "Message text prompts recipient to share an OTP, PIN, CVV, or password",
         "Kind": "HEURISTIC",
-        "Points": "+35"
+        "Severity": "Severe"
     },
     {
         "Check": "IP address host",
         "What it looks for": "A raw numeric IP address (e.g. 192.168.1.1) instead of a website name",
         "Kind": "FACT",
-        "Points": "+30"
+        "Severity": "Severe"
     },
     {
         "Check": "Lookalike letters",
         "What it looks for": "Non-Latin characters or punycode (xn--) impersonating legitimate Latin letters",
         "Kind": "FACT",
-        "Points": "+30"
+        "Severity": "Severe"
     },
     {
         "Check": "@ trick",
         "What it looks for": "Contains '@' where text before it disguises the real destination host",
         "Kind": "FACT",
-        "Points": "+25"
+        "Severity": "Moderate"
     },
     {
         "Check": "No HTTPS",
         "What it looks for": "Link explicitly uses unencrypted http:// instead of secure https://",
         "Kind": "FACT",
-        "Points": "+10"
+        "Severity": "Minor"
     },
     {
         "Check": "Phishing form on free host",
         "What it looks for": "Brand names or login words hosted on free platforms (Google Sites, Forms, etc.)",
         "Kind": "HEURISTIC",
-        "Points": "+35"
+        "Severity": "Severe"
     },
     {
         "Check": "Brand in subdomain",
         "What it looks for": "Brand name (or a longer form like icicibank) appears as a word in the address while the actual domain is owned by someone else",
         "Kind": "HEURISTIC",
-        "Points": "+30"
+        "Severity": "Severe"
     },
     {
         "Check": "Typo of a brand",
-        "What it looks for": "Domain differs by one letter from a brand name of 5+ letters (e.g. paytn for paytm)",
+        "What it looks for": "Domain is one letter away from a well-known brand name (e.g. paytn for paytm)",
         "Kind": "HEURISTIC",
-        "Points": "+25"
+        "Severity": "Moderate"
     },
     {
         "Check": "Coercion theme",
         "What it looks for": "Threat themes in messages (digital arrest, customs seizure, traffic challan, electricity disconnection)",
         "Kind": "HEURISTIC",
-        "Points": "+30"
+        "Severity": "Severe"
     },
     {
         "Check": "Urgency words",
-        "What it looks for": "Pressure words in message ('urgent', 'suspended', 'expired', 'act now'…)",
+        "What it looks for": "Pressure words in a message ('urgent', 'suspended', 'expired', 'act now'…)",
         "Kind": "HEURISTIC",
-        "Points": "up to +30 (+10/word)"
+        "Severity": "Minor to Severe, depending on how many"
     },
     {
         "Check": "Redirect inside link",
         "What it looks for": "A full link to a different, non-official website hidden inside the link",
         "Kind": "HEURISTIC",
-        "Points": "+35"
+        "Severity": "Severe"
     },
     {
         "Check": "Pay to receive",
         "What it looks for": "Advance-fee pattern in message ('pay ... to receive / claim / refund')",
         "Kind": "HEURISTIC",
-        "Points": "+25 (+30 if a prize or win is mentioned)"
+        "Severity": "Moderate, or Severe if a prize is mentioned"
     },
     {
         "Check": "Risky ending",
         "What it looks for": "Domain ending frequently abused in cheap scams (.xyz, .top, .click, .buzz, etc.)",
         "Kind": "HEURISTIC",
-        "Points": "+20"
+        "Severity": "Moderate"
     },
     {
         "Check": "Link shortener",
         "What it looks for": "URL shortening services (bit.ly, tinyurl.com, etc.) hiding the real destination",
         "Kind": "HEURISTIC",
-        "Points": "+15"
+        "Severity": "Moderate"
     },
     {
         "Check": "Phishing words",
-        "What it looks for": "Two or more credential keywords in path/subdomain (login, verify, kyc, banking…)",
+        "What it looks for": "Several credential keywords in the address (login, verify, kyc, banking…)",
         "Kind": "HEURISTIC",
-        "Points": "+15"
+        "Severity": "Moderate"
     },
     {
         "Check": "Many subdomains",
-        "What it looks for": "Three or more subdomain labels before the main domain name",
+        "What it looks for": "A long chain of subdomains in front of the real domain name",
         "Kind": "HEURISTIC",
-        "Points": "+15"
+        "Severity": "Moderate"
     },
     {
         "Check": "Long link",
-        "What it looks for": "Unusually long link (over 75 characters) used to push destination off-screen",
+        "What it looks for": "Unusually long link, used to push the real destination off-screen",
         "Kind": "HEURISTIC",
-        "Points": "+10"
+        "Severity": "Minor"
     },
     {
         "Check": "Hyphens or digits",
-        "What it looks for": "Two or more hyphens or three or more digits in domain name",
+        "What it looks for": "Lots of hyphens or digits in the domain name",
         "Kind": "HEURISTIC",
-        "Points": "+10"
+        "Severity": "Minor"
     },
 ]
 
@@ -238,21 +238,21 @@ with st.expander("Examples of common scam patterns (defanged)"):
     st.caption("Note: All examples above are defanged and harmless.")
 
 # -----------------------------------------------------------------------------
-# 5. HOW THE SCORE BECOMES A LEVEL
+# 5. HOW WE REACH A VERDICT
 # -----------------------------------------------------------------------------
-st.header("5. How the score becomes a level", anchor=False)
+st.header("5. How we reach a verdict", anchor=False)
 st.markdown(
     """
-    1. **Summing points:** Points from every triggered signal are summed together and bounded between **0 and 100**.
-    2. **Score brackets:**
-       - **Low Risk (0 to 29):** Minimal or no warning signs found.
-       - **Caution (30 to 59):** Moderate warning signs present. Proceed with care.
-       - **High Risk (60 to 100):** Multiple critical warning signs detected. Do not click.
-    3. **The rule against false alarms:** 
-       To be rated **High Risk**, a score of 60 or above is not enough on its own. The scan strictly requires 
-       either **at least one strong FACT** (20+ points) or warnings from **at least two different checks**. 
-       This prevents an isolated heuristic guess from unfairly sounding a major alarm. If this condition is not met, 
-       the level is safely capped at **Caution**.
+    1. **Weighing the evidence:** Every warning sign adds to the overall threat, and serious signs count more
+       than minor ones. Reassuring signs, like a brand's verified official domain, lower it.
+    2. **Three levels:**
+       - **Low risk:** No strong warning signs found.
+       - **Caution:** Some warning signs present. Check before you act.
+       - **High risk:** Strong evidence of a scam. Don't click.
+    3. **The rule against false alarms:**
+       A single educated guess can never make a link **High risk** on its own. High risk needs either
+       **a strong verifiable fact** or warnings from **at least two different checks**; otherwise the
+       verdict stays at **Caution**.
     4. **Message risk rule:** 
        When analyzing a message containing links, the overall message is always rated at least as risky as its riskiest embedded link.
     """
@@ -276,7 +276,7 @@ with st.expander("Read our known limitations and design boundaries", expanded=Fa
           Impersonation of organizations outside this list relies on the general checks.
         - **Typo detection trade-offs:** Spelling-similarity checks can occasionally flag ordinary words 
           that happen to look similar to a brand name.
-        - **Short brand names:** One-letter typos of 3–4 letter brands (for example sbl for SBI) are not
+        - **Short brand names:** One-letter typos of very short brand names (for example sbl for SBI) are not
           flagged, because at that length too many ordinary words differ by just one letter.
         - **The phishing list ages quickly:** Phishing sites often live only hours, so an offline snapshot misses
           newer ones. That's why the structural checks stay the main defence.
@@ -298,7 +298,7 @@ with col_built.container(border=True):
         """
         - **Offline link analysis:** Fast structural checks for brand spoofing, lookalikes, risky endings, and hidden destinations.
         - **SMS & WhatsApp message analysis:** Detection of urgency language, requests for secret credentials, and advance-fee schemes.
-        - **Explainable scoring engine:** Clear Fact vs Heuristic breakdown with safe recommendations.
+        - **Explainable verdicts:** Every warning is labelled Fact or Heuristic, with safe next steps.
         - **Labelled test cases:** Synthetic examples of safe and phishing links and messages on the **Examples** page.
         - **Evaluation benchmark:** Automated accuracy and false-alarm testing on the **Evaluation** page.
         - **Offline analysis:** No network calls during a scan; nothing you paste is sent anywhere.
@@ -326,8 +326,8 @@ st.markdown(
     """
     If you encounter a phishing link or suspected financial fraud in India, report it through official government channels:
     
-    - 🏛️ **National Cyber Crime Reporting Portal:** Visit [cybercrime.gov.in](https://cybercrime.gov.in) or call helpline **1930** immediately for financial fraud.
-    - 📱 **Chakshu Facility (Sanchar Saathi):** Report suspected fraudulent calls, SMS, or WhatsApp messages at [sancharsaathi.gov.in](https://sancharsaathi.gov.in).
-    - 🛡️ **Golden Safety Rule:** If in doubt, never click a link sent to you. Open the official mobile application directly or type the organization's verified website address yourself.
+    - **National Cyber Crime Reporting Portal:** Visit [cybercrime.gov.in](https://cybercrime.gov.in) or call helpline **1930** immediately for financial fraud.
+    - **Chakshu Facility (Sanchar Saathi):** Report suspected fraudulent calls, SMS, or WhatsApp messages at [sancharsaathi.gov.in](https://sancharsaathi.gov.in).
+    - **Golden Safety Rule:** If in doubt, never click a link sent to you. Open the official mobile application directly or type the organization's verified website address yourself.
     """
 )
