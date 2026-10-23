@@ -16,6 +16,28 @@ def severity(points):
     return "Minor", "gray"
 
 
+def threat_disc(score, level):
+    """
+    A ring (an SVG drawing) that fills up as the threat grows, coloured and labelled by the level.
+    Only our own values (a number and a level name) go into it, never the user's input.
+    """
+    color = {"High": "#FB7185", "Caution": "#FBBF24", "Low": "#34D399"}[level]    # Coral, Amber, Emerald
+    circumference = 2 * 3.1416 * 80    # the ring's radius is 80
+    filled = circumference * score / 100
+    # The coloured part of the ring, starting at the top; left out when there's no threat at all
+    arc = "" if score == 0 else (
+        f'<circle cx="100" cy="100" r="80" fill="none" stroke="{color}" stroke-width="16" stroke-linecap="round" '
+        f'stroke-dasharray="{filled:.1f} {circumference:.1f}" transform="rotate(-90 100 100)"/>'
+    )
+    font = 'font-family="Inter, Segoe UI, Arial, sans-serif"'
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <circle cx="100" cy="100" r="80" fill="none" stroke="#24344D" stroke-width="16"/>
+  {arc}
+  <text x="100" y="102" text-anchor="middle" {font} font-size="28" font-weight="700" fill="{color}">{level}</text>
+  <text x="100" y="128" text-anchor="middle" {font} font-size="13" fill="#94A3B8">threat level</text>
+</svg>"""
+
+
 def show_signal(signal):
     """One card per warning sign: severity and kind badges, the explanation, and the exact evidence."""
     label, color = severity(signal["points"])
@@ -94,14 +116,28 @@ else:
     else:
         st.success("**Low risk.** No strong warning signs found.", icon="✅")
 
-    # A summary row: the level, how many warning signs, and how many of them are facts
+    # The threat disc on the left; a summary card of what was found on the right
+    severities = [severity(signal["points"])[0] for signal in result["signals"]]    # e.g. ["Severe", "Minor"]
     warnings = [signal for signal in result["signals"] if signal["points"] > 0]
     facts = [signal for signal in warnings if signal["kind"] == "FACT"]
-    level_col, warning_col, fact_col = st.columns(3)
-    level_col.metric("Threat level", result["level"], border=True)
-    warning_col.metric("Warning signs", len(warnings), border=True)
-    fact_col.metric("Of which facts", len(facts), border=True)
-    st.progress(result["score"], text="Threat meter")
+    disc_col, summary_col = st.columns([3, 2], vertical_alignment="center")
+    with disc_col.container(horizontal_alignment="center"):    # st.html would strip the drawing, st.image shows it
+        st.image(threat_disc(result["score"], result["level"]), width=200)
+    with summary_col.container(border=True):
+        if not warnings:
+            st.markdown("##### No warning signs")
+        elif len(warnings) == 1:
+            st.markdown("##### 1 warning sign")
+        else:
+            st.markdown(f"##### {len(warnings)} warning signs")
+        with st.container(horizontal=True):    # one badge per severity that was found
+            for label, color in [("Severe", "red"), ("Moderate", "orange"), ("Minor", "gray"), ("Reassuring", "green")]:
+                if label in severities:
+                    st.badge(f"{severities.count(label)} {label}", color=color)
+        if warnings:
+            with st.container(horizontal=True):    # how many of the warnings are facts, and how many are educated guesses
+                st.badge(f"{len(facts)} FACT", icon=":material/verified:", color="blue")
+                st.badge(f"{len(warnings) - len(facts)} HEURISTIC", icon=":material/lightbulb:", color="violet")
 
     st.caption("What we checked")
     st.code(result["input"], language=None)
