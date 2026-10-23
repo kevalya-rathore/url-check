@@ -226,6 +226,16 @@ def detect_punycode_or_unicode(host: str) -> tuple[bool, str]:
 
 FEED_DATE = "23 Oct 2026"
 
+# Redirect pages that trusted sites put in front of outgoing links: (domain, path) -> query fields holding the real link
+REDIRECT_WRAPPERS = {
+    ("google.com", "/url"): ("q", "url"),
+    ("google.co.in", "/url"): ("q", "url"),
+    ("google.com", "/goto"): ("url",),
+    ("google.co.in", "/goto"): ("url",),
+    ("facebook.com", "/l.php"): ("u",),
+    ("youtube.com", "/redirect"): ("q",),
+}
+
 # Services where one host serves many different people's files
 SHARED_STORAGE = {"backblazeb2.com", "contabostorage.com", "googleapis.com", "dropbox.com"}
 
@@ -334,6 +344,22 @@ def analyze_url(raw_url: str) -> dict:
     registered_domain = f"{domain_parts.domain}.{domain_parts.suffix}".lower() if domain_parts.suffix else domain_parts.domain.lower()
 
     signals = []
+
+    # Check 0: a trusted site's redirect page (e.g. Google's /url and /goto) is judged by where it leads
+    wrapper_fields = REDIRECT_WRAPPERS.get((registered_domain, parsed.path))
+    if wrapper_fields:
+        fields = {key.lower(): values[0].strip() for key, values in parse_qs(parsed.query).items()}
+        for field in wrapper_fields:
+            if fields.get(field, "").lower().startswith(("http://", "https://")):
+                return analyze_url(fields[field])    # "What we checked" then shows the real destination
+        signals.append({
+            "kind": "FACT",
+            "check": "hidden_destination",
+            "title": f"The real destination is hidden inside {registered_domain}'s redirect link",
+            "evidence": parsed.path,
+            "points": 30,
+            "advice": "Select the web address shown under the search result and check that instead, or type the site's address yourself."
+        })
 
     # Check 1: the domain is one of a brand's official sites (lowers the score)
     is_official = False
@@ -579,7 +605,7 @@ def analyze_url(raw_url: str) -> dict:
                 break
 
     # No trusted-site credit when the trusted site is only carrying someone else's content
-    if any(signal["check"] in ("hosting_abuse", "open_redirect", "known_phishing") for signal in signals):
+    if any(signal["check"] in ("hosting_abuse", "open_redirect", "known_phishing", "hidden_destination") for signal in signals):
         signals = [signal for signal in signals if signal["check"] != "official_domain"]
 
     # Add up the points and keep the score between 0 and 100
