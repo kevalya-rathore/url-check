@@ -51,10 +51,10 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 # 1. SETTINGS & BRAND DATA
 # =====================================================
 
-def load_brands() -> tuple[dict, dict]:
+def load_brands() -> tuple[dict, dict, dict]:
     """
     Load brand -> official domains from data/brands.json.
-    Returns (brand_to_domains, official_domain_to_brand).
+    Returns (brand_to_domains, official_domain_to_brand, name_to_brand).
     """
     brands_path = DATA_DIR / "brands.json"
     with open(brands_path, "r", encoding="utf-8-sig") as f:
@@ -62,14 +62,21 @@ def load_brands() -> tuple[dict, dict]:
 
     # Reverse lookup for registered official domains
     official_domains = {}
+    # Every name that points to a brand: the brand itself ("hdfc"), plus longer
+    # forms of it used in its own domains ("hdfcbank" from "hdfcbank.com")
+    brand_names = {}
     for brand, domains in brand_map.items():
+        brand_names[brand] = brand
         for domain in domains:
             official_domains[domain.lower()] = brand
+            name = domain.lower().split(".")[0]    # "hdfcbank.com" -> "hdfcbank"
+            if brand in name:                      # skip unrelated names like "office" (Microsoft)
+                brand_names[name] = brand
 
-    return brand_map, official_domains
+    return brand_map, official_domains, brand_names
 
 
-BRANDS, OFFICIAL_DOMAINS = load_brands()
+BRANDS, OFFICIAL_DOMAINS, BRAND_NAMES = load_brands()
 
 # Score cut-offs: below 30 is Low, 30 to 59 is Caution, 60 and above can be High
 CAUTION_SCORE = 30
@@ -105,7 +112,9 @@ URGENT_WORDS = [
     "urgent", "suspended", "expire", "expired", "blocked",
     "last chance", "act now", "action required", "immediately", "immediate",
     "penalty", "challan", "disconnect", "electricity cutoff", "power cutoff",
-    "digital arrest", "customs", "arrest warrant", "deactivation"
+    "digital arrest", "customs", "arrest warrant", "deactivation",
+    # other forms of the words above, because whole-word matching won't find "urgently" inside "urgent"
+    "urgently", "disconnected", "suspension", "deactivated"
 ]
 
 SECRET_WORDS = [
@@ -507,9 +516,9 @@ def analyze_url(raw_url: str) -> dict:
 
     brand_flagged = False
 
-    # 13a. The domain IS a brand name, but not on one of that brand's official sites
-    if normalized_ext_domain in BRANDS and not is_official:
-        matched_brand = normalized_ext_domain
+    # 13a. The domain IS a brand name (or a longer form like "hdfcbank"), but not on one of its official sites
+    if normalized_ext_domain in BRAND_NAMES and not is_official:
+        matched_brand = BRAND_NAMES[normalized_ext_domain]
         official_domains = BRANDS.get(matched_brand, [])
         if registered_domain not in official_domains:
             brand_flagged = True
@@ -523,10 +532,10 @@ def analyze_url(raw_url: str) -> dict:
                 "advice": f"Type {primary_official} yourself in the browser instead of using this link."
             })
 
-    # 13b. A brand name appears as a word in the host, e.g. "sbi.co.in.verify-kyc.top"
+    # 13b. A brand name appears as a word in the host, e.g. "sbi.co.in.verify-kyc.top" or "icicibank-rewards.xyz"
     if not brand_flagged and not is_official:
-        for brand in BRANDS:
-            if brand in host_labels and domain_parts.domain != brand:
+        for name, brand in BRAND_NAMES.items():
+            if name in host_labels and domain_parts.domain != name:
                 official_domains = BRANDS.get(brand, [])
                 if registered_domain not in official_domains:
                     brand_flagged = True
@@ -535,7 +544,7 @@ def analyze_url(raw_url: str) -> dict:
                         "kind": "HEURISTIC",
                         "check": "brand_token_spoof",
                         "title": f"Pretends to be '{brand.upper()}' but real domain is '{registered_domain}'",
-                        "evidence": f"Token '{brand}' in host '{host}'",
+                        "evidence": f"Token '{name}' in host '{host}'",
                         "points": 30,
                         "advice": f"Type {primary_official} yourself in the browser instead of using this link."
                     })
@@ -652,27 +661,34 @@ def analyze_text(text: str) -> dict:
             "advice": "No legitimate bank or organization will ever ask for your OTP, PIN, or password. Never share them."
         })
 
-    # Check 3: "pay first to receive money" tricks, or extortion themes like "digital arrest"
+    # Check 3: "pay first to receive money" tricks, or threat themes common in Indian scams
     pay_receive_pattern = r"\b(?:pay|send)\b[^\.\n;]{1,40}\b(?:to\s+)?(?:receive|claim|get|refund)\b"
-    digital_arrest_pattern = r"\b(?:digital\s+arrest|customs\s+seiz(?:ed|ure)|traffic\s+challan\s+pending)\b"
+    threat_theme_patterns = [
+        r"\bdigital\s+arrest\b",
+        r"\bcustoms\s+seiz(?:ed|ure)\b",
+        r"\btraffic\s+challan\s+pending\b",
+        r"\belectricity\b[^.\n]{0,30}\bdisconnect",    # e.g. "electricity connection will be disconnected"
+    ]
 
     if re.search(pay_receive_pattern, text_lower):
+        # Paying first to collect a prize or lottery win is the classic advance-fee scam, so it counts more
+        mentions_prize = re.search(r"\b(?:won|winner|prize|lottery|lucky\s+draw)\b", text_lower)
         signals.append({
             "kind": "HEURISTIC",
             "check": "pay_to_receive_trick",
             "title": "'Pay first to receive money or reward' deception detected",
             "evidence": "Pay ... to receive/refund pattern",
-            "points": 25,
+            "points": 30 if mentions_prize else 25,
             "advice": "Never pay an advance fee or processing charge to receive lottery winnings, prizes, or refunds."
         })
-    elif re.search(digital_arrest_pattern, text_lower):
+    elif any(re.search(pattern, text_lower) for pattern in threat_theme_patterns):
         signals.append({
             "kind": "HEURISTIC",
             "check": "coercion_extortion_theme",
-            "title": "Known extortion theme detected (Digital Arrest / Customs / Challan)",
-            "evidence": "Extortion keyword pattern",
+            "title": "Known threat scam detected (digital arrest, customs, challan or electricity cut-off)",
+            "evidence": "Threat theme pattern",
             "points": 30,
-            "advice": "Law enforcement agencies never conduct 'digital arrests' or demand monetary settlements over phone or video."
+            "advice": "Police, customs and power companies never threaten arrest or disconnection by SMS or video call. Contact them through their official website or app."
         })
 
     # Check 4: every link in the message, checked like a pasted link

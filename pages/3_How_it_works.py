@@ -115,7 +115,7 @@ checks_data = [
     },
     {
         "Check": "Brand on wrong domain",
-        "What it looks for": "Brand name used on a domain that isn't on our list of its official sites (e.g. sbi on .xyz)",
+        "What it looks for": "Brand name, or a longer form from its own domains like hdfcbank, used on a domain that isn't one of its official sites (e.g. sbi on .xyz)",
         "Kind": "HEURISTIC",
         "Points": "+40"
     },
@@ -157,7 +157,7 @@ checks_data = [
     },
     {
         "Check": "Brand in subdomain",
-        "What it looks for": "Brand name placed in a subdomain while the actual domain is owned by someone else",
+        "What it looks for": "Brand name (or a longer form like icicibank) appears as a word in the address while the actual domain is owned by someone else",
         "Kind": "HEURISTIC",
         "Points": "+30"
     },
@@ -169,7 +169,7 @@ checks_data = [
     },
     {
         "Check": "Coercion theme",
-        "What it looks for": "Extortion themes in messages (digital arrest, customs seizure, traffic challan)",
+        "What it looks for": "Threat themes in messages (digital arrest, customs seizure, traffic challan, electricity disconnection)",
         "Kind": "HEURISTIC",
         "Points": "+30"
     },
@@ -189,7 +189,7 @@ checks_data = [
         "Check": "Pay to receive",
         "What it looks for": "Advance-fee pattern in message ('pay ... to receive / claim / refund')",
         "Kind": "HEURISTIC",
-        "Points": "+25"
+        "Points": "+25 (+30 if a prize or win is mentioned)"
     },
     {
         "Check": "Risky ending",
