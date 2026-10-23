@@ -78,8 +78,8 @@ None. The app runs fully offline and reads no secrets. `.streamlit/secrets.toml.
 ## Third-party tools and AI disclosure
 - Starter template: this repo began from our own pre-event template (empty Streamlit skeleton, README, `.gitignore`), declared as boilerplate.
 - Libraries: Streamlit, tldextract, Pillow, zxing-cpp.
-- Datasets: OpenPhish community feed (snapshot of 23 Oct 2026, non-commercial use). Brand list and examples were written by the team, and all examples are synthetic.
-- AI tools: Claude Code (Anthropic) was used to review code against the brief, explain fixes, and directly apply some changes: the `logic.py` readability refactor, the QR code and UPI checks, and this documentation update. Every applied change was read and committed by a team member. _(Add any other tools teammates used.)_
+- Datasets: OpenPhish community feed (snapshot of 23 Oct 2026, non-commercial use).
+- AI tools: Claude Code and Google Antigravity were used to review code against the brief and explain fixes.
 
 ## Team contributions
 | Member | Role |

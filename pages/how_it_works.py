@@ -17,11 +17,8 @@ st.header("1. What Aegis Guard does", anchor=False)
 st.markdown(
     """
     Aegis Guard is built for anyone in India who receives a suspicious or unexpected link by SMS, 
-    WhatsApp, or email. Before you click, it analyzes the link or message text for deceptive warning signs,
+    WhatsApp, or email. Before you click, it analyzes the link or message text for deceptive warning signs, 
     explains what looks suspicious, and tells you safe actions to take instead.
-
-    You can paste a link or a message, upload a picture of a QR code (including UPI payment codes), or
-    right-click any link in Chrome and choose **Check with Aegis Guard** using our browser extension.
     """
 )
 
@@ -40,11 +37,7 @@ st.markdown(
     - **Scammer tracking defense:** Many phishing links include a unique tracking code created specifically for you. 
       Simply opening the page confirms to the attacker that your phone number or email is active and monitored, 
       marking you for further aggressive scams.
-
-    The same rule covers everything else: a QR code is only decoded from the picture's pixels, the browser
-    extension only passes on the link's address, and for redirect links from Google, Facebook or YouTube we
-    read the real destination written inside the link instead of following the redirect.
-
+    
     *What about domain registration checks?* A domain-age lookup asks the official public registry how recently 
     a domain was registered, without contacting the website itself. **In this demo, domain-age lookups are not enabled;** 
     all checks run 100% offline for maximum speed and privacy.
@@ -137,12 +130,6 @@ checks_data = [
     {
         "Check": "Lookalike letters",
         "What it looks for": "Non-Latin characters or punycode (xn--) impersonating legitimate Latin letters",
-        "Kind": "FACT",
-        "Severity": "Severe"
-    },
-    {
-        "Check": "Hidden redirect destination",
-        "What it looks for": "A Google, Facebook or YouTube redirect link whose real destination can't be read. When it can be read, we check that destination instead",
         "Kind": "FACT",
         "Severity": "Severe"
     },
@@ -240,48 +227,6 @@ checks_data = [
 
 st.table(checks_data, hide_index=True)
 
-st.subheader("QR codes and UPI payments", anchor=False)
-st.markdown(
-    "A QR code is read from the picture, then checked as a link, a message, or a UPI payment. "
-    "A UPI payment code (`upi://`) gets its own checks, and the first next step always reminds you that "
-    "**scanning a UPI QR code can only take money from you, never give you money.**"
-)
-
-upi_checks_data = [
-    {
-        "Check": "Bad UPI ID",
-        "What it looks for": "The payee's UPI ID is missing or isn't in the normal name@bank form",
-        "Kind": "FACT",
-        "Severity": "Severe"
-    },
-    {
-        "Check": "Autopay mandate",
-        "What it looks for": "The code sets up automatic repeating payments (upi://mandate) instead of one payment",
-        "Kind": "FACT",
-        "Severity": "Severe"
-    },
-    {
-        "Check": "Promises you money",
-        "What it looks for": "The payee name or note says refund, cashback, prize, lottery, reward, KYC…",
-        "Kind": "HEURISTIC",
-        "Severity": "Severe"
-    },
-    {
-        "Check": "Brand as payee name",
-        "What it looks for": "The payee calls itself a bank or company from our brand list (anyone can pick that name)",
-        "Kind": "HEURISTIC",
-        "Severity": "Moderate"
-    },
-    {
-        "Check": "Amount already filled in",
-        "What it looks for": "The code fixes the amount you'll pay",
-        "Kind": "FACT",
-        "Severity": "Minor"
-    },
-]
-
-st.table(upi_checks_data, hide_index=True)
-
 with st.expander("Examples of common scam patterns (defanged)"):
     st.markdown("Here is how deceptive links structure these patterns:")
     st.markdown("**1. Brand placed in subdomain to mislead:**")
@@ -335,11 +280,6 @@ with st.expander("Read our known limitations and design boundaries", expanded=Fa
           flagged, because at that length too many ordinary words differ by just one letter.
         - **The phishing list ages quickly:** Phishing sites often live only hours, so an offline snapshot misses
           newer ones. That's why the structural checks stay the main defence.
-        - **Redirect links:** We read the hidden destination only from Google, Facebook and YouTube redirect
-          links. Other sites' redirect pages are judged by the visible link alone.
-        - **UPI IDs can't be verified offline:** We can't tell whether a UPI ID really belongs to the shop or
-          person it names. Always check the payee name your UPI app shows before entering your PIN.
-        - **One QR code per picture:** If a picture has several QR codes, only the first one is checked.
         - **Language support:** Message analysis currently checks English keywords and patterns only.
         - **Probabilistic nature of heuristics:** Heuristics can produce both false alarms and misses. 
           Our measured benchmark accuracy, false alarms, and misses are published on the **Evaluation** page.
@@ -358,9 +298,6 @@ with col_built.container(border=True):
         """
         - **Offline link analysis:** Fast structural checks for brand spoofing, lookalikes, risky endings, and hidden destinations.
         - **SMS & WhatsApp message analysis:** Detection of urgency language, requests for secret credentials, and advance-fee schemes.
-        - **QR code and UPI checks:** Upload a QR code picture; UPI payment codes get their own five checks.
-        - **Hidden redirect destinations:** Google, Facebook and YouTube redirect links are judged by where they really lead.
-        - **Browser extension:** Right-click a link or selected message in Chrome to check it here (loaded unpacked, not yet on the Chrome Web Store).
         - **Explainable verdicts:** Every warning is labelled Fact or Heuristic, with safe next steps.
         - **Labelled test cases:** Synthetic examples of safe and phishing links and messages on the **Examples** page.
         - **Evaluation benchmark:** Automated accuracy and false-alarm testing on the **Evaluation** page.
@@ -373,7 +310,7 @@ with col_not_built.container(border=True):
     st.badge("Not built / not enabled", icon=":material/schedule:", color="orange")
     st.markdown(
         """
-        - **Domain-age registry lookup:** Not enabled in this demo (offline-only operation).
+        - **Domain-age registry lookup:** Not enabled in this demo (offline-only operation).    
         - **Email header analysis:** SPF, DKIM, and DMARC inspection is not included.
         - **Page opening or screenshots:** Deliberately omitted to prevent exposing users to malicious payloads.
         - **AI / LLM generated text:** Scans use deterministic, auditable rules rather than opaque language models.
