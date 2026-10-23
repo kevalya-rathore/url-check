@@ -1,8 +1,8 @@
-# Starter template (declared boilerplate, written before the event).
+# Aegis Guard home page: paste a link or a message and see its warning signs.
 # Shape: setup -> input -> PART 1 (actions, only on submit) -> PART 2 (display, every rerun)
 import streamlit as st
 
-from logic import analyze_text, analyze_url
+from logic import analyze_text, analyze_url, refang_url
 
 
 def severity(points):
@@ -39,10 +39,15 @@ if submitted:
     elif len(text) > 2000:
         st.error("Input can't be more than 2000 characters.")
     else:
-        if mode == "Link":
-            st.session_state["result"] = analyze_url(text, online=False)
-        else:
-            st.session_state["result"] = analyze_text(text, online=False)
+        clean_text = refang_url(text)    # undo "hxxp" and "[.]" so links copied from safe write-ups are checked properly
+        try:
+            if mode == "Link":
+                st.session_state["result"] = analyze_url(clean_text)
+            else:
+                st.session_state["result"] = analyze_text(clean_text)
+        except ValueError:
+            st.session_state["result"] = None
+            st.error("That doesn't look like a valid link. Check for stray brackets and try again.")
 
 # PART 2: display, on every rerun, read from session_state
 result = st.session_state["result"]
