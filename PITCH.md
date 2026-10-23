@@ -8,5 +8,3 @@
 | 2:00–2:30 | How it works | Simple architecture: input -> logic -> output/storage, stack |
 | 2:30–2:50 | What's next | Limitations, future scope |
 | 2:50–3:00 | Team | Who built what |
-
-Before going on stage: close secrets.toml and API key tabs; open the live URL and the backup video.
