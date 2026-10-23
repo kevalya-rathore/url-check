@@ -1,363 +1,840 @@
-"""logic.py - detection logic for ScamShield (CY-01)
+"""logic.py - Detection logic for Aegis Guard (CY-01).
 
-Every checker function returns TWO things:
-    score   -> a number (more points = more dangerous)
-    reasons -> a list of sentences explaining why points were added
+Implements multi-layered, offline-first analysis for URLs and text messages.
+Distinguishes verifiable structural facts (FACT) from pattern-based inferences (HEURISTIC).
+All network operations are omitted here; optional RDAP domain checks are handled via api.py.
+
+Result shape:
+    {
+        "input": str,
+        "score": int (0-100),
+        "level": "Low" | "Caution" | "High",
+        "signals": [
+            {
+                "kind": "FACT" | "HEURISTIC",
+                "check": str,
+                "title": str,
+                "evidence": str,
+                "points": int,
+                "advice": str
+            }, ...
+        ],
+        "next_steps": [str, ...]
+    }
 """
 
-from datetime import datetime
-from difflib import SequenceMatcher   # compares how similar two words are
-from urllib.parse import urlparse     # splits a URL into parts
+import csv
+import json
+from pathlib import Path
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import parse_qs, unquote, urlparse
 
-import tldextract                     # splits a domain into subdomain/domain/suffix
-
-
-# =====================================================
-# 1. SETTINGS (lists we compare against)
-# =====================================================
-BRANDS = ["sbi", "hdfc", "icici", "paytm", "phonepe", "amazon", "google", "flipkart"]
-
-# Real websites of those brands (we trust these)
-OFFICIAL_SITES = ["sbi.co.in", "hdfcbank.com", "icicibank.com", "paytm.com",
-                  "phonepe.com", "amazon.in", "amazon.com", "google.com", "flipkart.com"]
-
-BAD_ENDINGS = ["xyz", "top", "click", "buzz", "tk", "ml", "ga", "cf", "live", "icu"]
-SHORTENERS = ["bit.ly", "tinyurl.com", "t.co", "goo.gl", "cutt.ly", "is.gd", "rb.gy"]
-
-PHISH_WORDS = ["login", "verify", "secure", "update", "kyc", "account",
-               "confirm", "banking", "wallet", "reward", "free", "bonus"]
-
-URGENT_WORDS = ["urgent", "blocked", "suspended", "kyc", "expire", "last chance",
-                "claim", "reward", "prize", "verify now", "act now", "lottery"]
-
-SECRET_WORDS = ["otp", "pin", "cvv", "password", "card number", "upi pin"]
-
-LINK_ENDINGS = [".com", ".in", ".xyz", ".top", ".click", ".co", ".ly", ".net", ".org"]
+# Use tldextract with suffix_list_urls=() so it strictly uses the bundled snapshot
+# and never initiates a live network download (Section 1).
+try:
+    import tldextract
+    _EXTRACTOR = tldextract.TLDExtract(cache_dir=False, suffix_list_urls=())
+except Exception:
+    _EXTRACTOR = None
 
 
 # =====================================================
-# 2. SMALL HELPER FUNCTIONS
+# 1. SETTINGS & BRAND DATA (D7, Section 14)
 # =====================================================
-def normalize(url):
-    """Make sure the URL starts with http:// or https://"""
-    url = url.strip()                       # remove spaces at both ends
-    if url.startswith("http://") or url.startswith("https://"):
-        return url
-    return "http://" + url
+
+DEFAULT_BRANDS: Dict[str, List[str]] = {
+    "sbi": ["sbi.co.in", "onlinesbi.sbi"],
+    "hdfc": ["hdfcbank.com"],
+    "icici": ["icicibank.com"],
+    "paytm": ["paytm.com"],
+    "phonepe": ["phonepe.com"],
+    "amazon": ["amazon.in", "amazon.com", "amazonaws.com"],
+    "google": ["google.com", "google.co.in", "googleapis.com", "gstatic.com"],
+    "flipkart": ["flipkart.com"],
+    "irctc": ["irctc.co.in"],
+    "indiapost": ["indiapost.gov.in"],
+    "uidai": ["uidai.gov.in"],
+    "incometax": ["incometax.gov.in"],
+    "parivahan": ["parivahan.gov.in"],
+    "npci": ["npci.org.in"],
+    "bhim": ["bhimupi.org.in"],
+    "tatapower": ["tatapower.com"],
+    "bescom": ["bescom.karnataka.gov.in"],
+    "mahadiscom": ["mahadiscom.in"]
+}
 
 
-def is_ip_address(host):
-    """Return True if host looks like 192.168.1.1"""
-    host = host.split(":")[0]               # remove port number like :8080
-    parts = host.split(".")                 # "1.2.3.4" -> ["1","2","3","4"]
+def load_brands() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+    """
+    Load brand domain mapping from data/brands.json relative to logic.py (D7).
+    Returns (brand_to_domains, official_domain_to_brand).
+    """
+    brands_path = Path(__file__).resolve().parent / "data" / "brands.json"
+    brand_map = dict(DEFAULT_BRANDS)
+
+    if brands_path.exists():
+        try:
+            with open(brands_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    brand_map = loaded
+        except Exception:
+            pass
+
+    # Reverse lookup for registered official domains
+    official_domains: Dict[str, str] = {}
+    for brand, domains in brand_map.items():
+        for dom in domains:
+            official_domains[dom.lower()] = brand
+
+    return brand_map, official_domains
+
+
+BRANDS, OFFICIAL_DOMAINS = load_brands()
+
+BAD_ENDINGS: Set[str] = {
+    "xyz", "top", "click", "buzz", "tk", "ml", "ga", "cf",
+    "live", "icu", "work", "loan", "fit", "rest", "surf", "monster"
+}
+
+SHORTENERS: Set[str] = {
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "cutt.ly",
+    "is.gd", "rb.gy", "shorturl.at", "tiny.cc", "ow.ly"
+}
+
+FREE_HOSTS: Set[str] = {
+    "sites.google.com", "docs.google.com", "forms.google.com",
+    "drive.google.com", "firebaseapp.com", "web.app", "github.io",
+    "pages.dev", "weebly.com", "wixsite.com", "blogspot.com"
+}
+
+PHISH_WORDS: List[str] = [
+    "login", "verify", "secure", "update", "kyc", "account",
+    "confirm", "banking", "wallet", "reward", "bonus", "claim",
+    "credential", "password", "authenticate", "pan"
+]
+
+URGENT_WORDS: List[str] = [
+    "urgent", "suspended", "expire", "expired", "block", "blocked",
+    "last chance", "act now", "action required", "immediately", "immediate",
+    "penalty", "challan", "disconnect", "electricity cutoff", "power cutoff",
+    "digital arrest", "customs", "arrest warrant", "fine", "deactivation"
+]
+
+SECRET_WORDS: List[str] = [
+    "otp", "pin", "cvv", "password", "card number", "upi pin", "passcode"
+]
+
+# Visual lookalikes: Cyrillic, Greek, and digit leetspeak mapped to Latin
+HOMOGLYPH_MAP: Dict[str, str] = {
+    "\u0430": "a", "\u0441": "c", "\u0435": "e", "\u043e": "o",
+    "\u0440": "p", "\u0455": "s", "\u0456": "i", "\u0458": "j",
+    "\u0443": "y", "\u0445": "x", "\u045d": "i", "\u0406": "i",
+    "\u0501": "d", "\u051b": "q", "\u0578": "n", "\u03b1": "a",
+    "\u03bf": "o", "\u03c5": "u", "\u03bd": "v",
+    "0": "o", "1": "l", "3": "e", "5": "s"
+}
+
+
+# =====================================================
+# 2. STRING & DOMAIN UTILITIES
+# =====================================================
+
+def normalize_url(url: str) -> Tuple[str, bool]:
+    """Ensure URL has a scheme for parsing. Returns (normalized_url, had_explicit_scheme)."""
+    url = url.strip()
+    has_scheme = url.startswith("http://") or url.startswith("https://")
+    if has_scheme:
+        return url, True
+    return "http://" + url, False
+
+
+def is_ip_address(host: str) -> bool:
+    """Return True if host is a numeric IPv4 address."""
+    clean_host = host.split(":")[0].strip("[]")
+    parts = clean_host.split(".")
     if len(parts) != 4:
         return False
     for part in parts:
-        if not part.isdigit():              # every part must be only digits
+        if not part.isdigit():
+            return False
+        num = int(part)
+        if num < 0 or num > 255:
             return False
     return True
 
 
-def count_digits(text):
-    """Count how many digits (0-9) are in the text"""
-    count = 0
-    for letter in text:
-        if letter.isdigit():
-            count = count + 1
-    return count
+def count_digits(text: str) -> int:
+    """Count numeric digits in a string."""
+    return sum(1 for ch in text if ch.isdigit())
 
 
-# =====================================================
-# 3. LAYER 1: URL CHECK (works offline, very fast)
-# =====================================================
-def check_url(url):
-    score = 0
-    reasons = []
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Compute the Levenshtein edit distance between two strings."""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
 
-    url = normalize(url)
-    url_lower = url.lower()
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
+def normalize_visual_lookalikes(text: str) -> str:
+    """Normalize common unicode homoglyphs and leetspeak substitutions to Latin."""
+    lower_text = text.lower()
+    lower_text = lower_text.replace("rn", "m").replace("vv", "w")
+    result = []
+    for ch in lower_text:
+        result.append(HOMOGLYPH_MAP.get(ch, ch))
+    return "".join(result)
+
+
+def extract_domain_parts(url: str):
+    """Safely extract subdomain, domain, and suffix using tldextract."""
+    if _EXTRACTOR is not None:
+        try:
+            return _EXTRACTOR(url)
+        except Exception:
+            pass
+
     parsed = urlparse(url)
-    ext = tldextract.extract(url)
+    host = parsed.netloc.split(":")[0].lower()
+    parts = host.split(".")
+    if len(parts) >= 2:
+        return type("Extract", (), {
+            "subdomain": ".".join(parts[:-2]),
+            "domain": parts[-2],
+            "suffix": parts[-1],
+            "registered_domain": f"{parts[-2]}.{parts[-1]}"
+        })()
+    return type("Extract", (), {"subdomain": "", "domain": host, "suffix": "", "registered_domain": host})()
 
-    # Example: http://login.sbi-kyc.xyz/page
-    #   ext.subdomain = "login"
-    #   ext.domain    = "sbi-kyc"
-    #   ext.suffix    = "xyz"
-    host = parsed.netloc.lower()                    # "login.sbi-kyc.xyz"
-    real_domain = ext.domain + "." + ext.suffix     # "sbi-kyc.xyz" (the true owner)
 
-    # If it is an official site, stop here and say it is safe
-    if real_domain in OFFICIAL_SITES:
-        return 0, ["Official website: " + real_domain]
+def detect_punycode_or_unicode(host: str) -> Tuple[bool, str]:
+    """Detect non-ASCII characters or Punycode encoding in host."""
+    has_non_ascii = any(ord(c) > 127 for c in host)
+    has_punycode = "xn--" in host.lower()
 
-    # Check 1: IP address instead of a name
+    puny_host = host
+    if has_non_ascii:
+        try:
+            puny_host = host.encode("idna").decode("ascii")
+        except Exception:
+            puny_host = host
+
+    return (has_non_ascii or has_punycode), puny_host
+
+
+# =====================================================
+# 3. URL ANALYSIS (D1, D3, D5, D6)
+# =====================================================
+
+def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
+    """
+    Analyze a URL for phishing, brand spoofing, and evasion indicators.
+    Returns the unified result dictionary (D3).
+    """
+    original_input = raw_url.strip()
+    if not original_input:
+        return {
+            "input": original_input,
+            "score": 0,
+            "level": "Low",
+            "signals": [],
+            "next_steps": ["Enter a valid URL to analyze."]
+        }
+
+    url, had_explicit_scheme = normalize_url(original_input)
+    parsed = urlparse(url)
+    ext = extract_domain_parts(url)
+
+    host = parsed.netloc.lower().split(":")[0]
+    registered_domain = f"{ext.domain}.{ext.suffix}".lower() if ext.suffix else ext.domain.lower()
+
+    signals: List[Dict[str, Any]] = []
+
+    # Check A: Trusted Official Domain (D6)
+    is_official = False
+    official_brand_match = OFFICIAL_DOMAINS.get(registered_domain)
+    if official_brand_match:
+        is_official = True
+        signals.append({
+            "kind": "FACT",
+            "check": "official_domain",
+            "title": f"Verified official domain for {official_brand_match.upper()}",
+            "evidence": registered_domain,
+            "points": -35,
+            "advice": f"This domain matches the registered official site for {official_brand_match.upper()}."
+        })
+
+    # Check B: Hosting Abuse on Free / Cloud Platforms (Section 8)
+    full_path_and_query = (parsed.path + " " + parsed.query).lower()
+    is_free_host = any(host == fh or host.endswith("." + fh) for fh in FREE_HOSTS)
+    if is_free_host:
+        suspicious_path_tokens = []
+        for brand in BRANDS:
+            if re.search(rf"\b{re.escape(brand)}\b", full_path_and_query):
+                suspicious_path_tokens.append(brand)
+        for phish in PHISH_WORDS:
+            if re.search(rf"\b{re.escape(phish)}\b", full_path_and_query):
+                suspicious_path_tokens.append(phish)
+
+        if suspicious_path_tokens:
+            signals.append({
+                "kind": "HEURISTIC",
+                "check": "hosting_abuse",
+                "title": "Suspicious brand or phishing keywords hosted on a free platform",
+                "evidence": f"Path contains: {', '.join(set(suspicious_path_tokens))}",
+                "points": 35,
+                "advice": "Attackers frequently host credential-harvesting forms on free services like Google Sites or Forms."
+            })
+
+    # Check C: Open Redirect Query Parameters (Section 8)
+    if parsed.query:
+        query_decoded = unquote(parsed.query).lower()
+        if any(marker in query_decoded for marker in ["http://", "https://", "hxxp://", "hxxps://", "url=", "dest=", "redirect="]):
+            signals.append({
+                "kind": "HEURISTIC",
+                "check": "open_redirect",
+                "title": "Possible open redirect parameter in query string",
+                "evidence": parsed.query[:80],
+                "points": 25,
+                "advice": "Beware of links that forward through legitimate sites to third-party destinations."
+            })
+
+    # Check 1: Numeric IP host
     if is_ip_address(host):
-        score = score + 30
-        reasons.append("Uses an IP address instead of a website name")
+        signals.append({
+            "kind": "FACT",
+            "check": "ip_host",
+            "title": "Uses a numeric IP address instead of a domain name",
+            "evidence": host,
+            "points": 30,
+            "advice": "Legitimate banking and enterprise portals use verified domain names, not raw IP addresses."
+        })
 
-    # Check 2: '@' symbol (browser ignores everything before it)
-    if "@" in url:
-        score = score + 20
-        reasons.append("Contains '@' symbol to hide the real website")
+    # Check 2: '@' symbol in URL
+    if "@" in original_input:
+        signals.append({
+            "kind": "FACT",
+            "check": "at_symbol",
+            "title": "Contains '@' symbol to disguise actual host destination",
+            "evidence": "@",
+            "points": 25,
+            "advice": "Browsers treat text before '@' as user credentials and navigate to what follows."
+        })
 
-    # Check 3: very long URL
+    # Check 3: Scheme (penalize only when user explicitly supplied http://)
+    if had_explicit_scheme and parsed.scheme == "http":
+        signals.append({
+            "kind": "FACT",
+            "check": "no_https",
+            "title": "Does not use secure HTTPS encryption",
+            "evidence": "http://",
+            "points": 10,
+            "advice": "Never enter passwords or confidential details on unencrypted HTTP pages."
+        })
+
+    # Check 4: Unicode / Punycode lookalikes (Section 11)
+    has_lookalike, puny_rep = detect_punycode_or_unicode(host)
+    if has_lookalike:
+        signals.append({
+            "kind": "FACT",
+            "check": "punycode_lookalike",
+            "title": "Uses internationalized (Punycode) or lookalike characters",
+            "evidence": puny_rep,
+            "points": 30,
+            "advice": "This domain uses lookalike characters (homoglyphs) to impersonate a legitimate service."
+        })
+
+    # Check 5: Risky TLD
+    last_suffix = ext.suffix.split(".")[-1].lower() if ext.suffix else ""
+    if last_suffix in BAD_ENDINGS:
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "risky_tld",
+            "title": f"Risky top-level domain ending: .{ext.suffix}",
+            "evidence": "." + ext.suffix,
+            "points": 20,
+            "advice": f"Be cautious of links ending in .{ext.suffix}, frequently used in low-cost scam campaigns."
+        })
+
+    # Check 6: Link shortener
+    if registered_domain in SHORTENERS:
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "shortener",
+            "title": "Shortened link obscures the real destination",
+            "evidence": registered_domain,
+            "points": 15,
+            "advice": "Don't open it. Ask the sender where it leads, or verify on the official app."
+        })
+
+    # Check 7: Length, subdomains, hyphens, and slashes
     if len(url) > 75:
-        score = score + 10
-        reasons.append("URL is very long")
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "url_length",
+            "title": "URL length is unusually long",
+            "evidence": f"{len(url)} characters",
+            "points": 10,
+            "advice": "Inspect the address carefully for hidden parameters or obscured destinations."
+        })
 
-    # Check 4: too many subdomains (dots in the subdomain part)
-    if ext.subdomain.count(".") >= 2:
-        score = score + 15
-        reasons.append("Too many subdomains")
+    if ext.subdomain and ext.subdomain.count(".") >= 2:
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "excessive_subdomains",
+            "title": "Excessive subdomains used to mimic authentic services",
+            "evidence": ext.subdomain,
+            "points": 15,
+            "advice": "Check the rightmost registered domain name to identify who actually owns the site."
+        })
 
-    # Check 5: no HTTPS
-    if parsed.scheme != "https":
-        score = score + 10
-        reasons.append("Does not use HTTPS")
-
-    # Check 6: risky ending like .xyz
-    last_part = ext.suffix.split(".")[-1]           # "co.in" -> "in"
-    if last_part in BAD_ENDINGS:
-        score = score + 20
-        reasons.append("Risky domain ending: ." + ext.suffix)
-
-    # Check 7: link shortener
-    if real_domain in SHORTENERS:
-        score = score + 15
-        reasons.append("Shortened link hides the real destination")
-
-    # Check 8: many hyphens or digits in the domain name
     if host.count("-") >= 2 or count_digits(ext.domain) >= 3:
-        score = score + 10
-        reasons.append("Many hyphens or digits in the domain")
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "hyphens_digits",
+            "title": "Excessive hyphens or digits in domain name",
+            "evidence": ext.domain,
+            "points": 10,
+            "advice": "Scammers frequently insert hyphens and numbers to create copycat domain names."
+        })
 
-    # Check 9: '//' appearing twice means a hidden redirect
     if url.count("//") > 1:
-        score = score + 10
-        reasons.append("Possible hidden redirect")
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "multiple_slashes",
+            "title": "Multiple double slashes indicating potential redirect path",
+            "evidence": "//",
+            "points": 10,
+            "advice": "Verify that the link does not route through an unauthorized redirector."
+        })
 
-    # Check 10: look-alike (punycode) characters
-    if "xn--" in host:
-        score = score + 20
-        reasons.append("Uses look-alike characters in the domain")
+    # Check 8: Phishing keywords in URL (Section 4)
+    url_tokens = set(re.split(r"[/.\-_?&=]", parsed.path.lower() + " " + ext.subdomain.lower()))
+    found_phish_words = [pw for pw in PHISH_WORDS if pw in url_tokens]
+    if len(found_phish_words) >= 2:
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "phish_words",
+            "title": f"Multiple phishing keywords in URL: {', '.join(found_phish_words)}",
+            "evidence": ", ".join(found_phish_words),
+            "points": 15,
+            "advice": "Avoid entering credentials on URLs containing multiple account-verification words."
+        })
 
-    # Check 11: scammy words inside the URL
-    found_words = []
-    for word in PHISH_WORDS:
-        if word in url_lower:
-            found_words.append(word)
-    if len(found_words) >= 2:                       # need 2+, one word is common
-        score = score + 15
-        reasons.append("Scam words in URL: " + ", ".join(found_words))
+    # Check 9: Brand Impersonation & Typosquatting (Section 4, 11, 14)
+    normalized_ext_domain = normalize_visual_lookalikes(ext.domain)
+    normalized_host = normalize_visual_lookalikes(host)
+    host_labels = set(re.split(r"[.\-_]", normalized_host))
 
-    # Check 12: pretending to be a known brand
-    for brand in BRANDS:
-        name_part = ext.subdomain + "." + ext.domain
-        if brand in name_part.lower() and ext.domain != brand:
-            score = score + 30
-            reasons.append("Pretends to be '" + brand + "' but real domain is '" + real_domain + "'")
-            break                                   # stop after first match
+    brand_flagged = False
 
-        similarity = SequenceMatcher(None, ext.domain, brand).ratio()   # 0 to 1
-        if ext.domain != brand and similarity > 0.8:
-            score = score + 30
-            reasons.append("Looks like a fake spelling of '" + brand + "'")
-            break
+    # 9a. Exact brand name registered on unauthorized domain
+    if normalized_ext_domain in BRANDS:
+        matched_brand = normalized_ext_domain
+        official_domains = BRANDS.get(matched_brand, [])
+        if registered_domain not in official_domains:
+            brand_flagged = True
+            primary_official = official_domains[0] if official_domains else f"{matched_brand}.com"
+            signals.append({
+                "kind": "FACT",
+                "check": "unauthorized_brand_domain",
+                "title": f"Uses exact brand name '{matched_brand.upper()}' on unauthorized domain '{registered_domain}'",
+                "evidence": registered_domain,
+                "points": 40,
+                "advice": f"Type {primary_official} yourself in the browser instead of using this link."
+            })
 
-    if score > 100:
-        score = 100
-    return score, reasons
-
-
-# =====================================================
-# 4. LAYER 2: ONLINE CHECKS (need internet)
-# =====================================================
-def check_domain_age(url):
-    """New websites (made recently) are often scams."""
-    try:
-        import whois
-        ext = tldextract.extract(url)
-        info = whois.whois(ext.domain + "." + ext.suffix)
-        created = info.creation_date
-
-        if type(created) == list:                   # sometimes WHOIS gives a list
-            created = created[0]
-        if created is None:
-            return 0, []
-
-        created = created.replace(tzinfo=None)      # avoid timezone errors
-        age_days = (datetime.now() - created).days
-
-        if age_days < 30:
-            return 30, ["Website is only " + str(age_days) + " days old"]
-        if age_days < 180:
-            return 10, ["Website is fairly new (" + str(age_days) + " days)"]
-        return 0, []
-    except Exception:
-        return 0, []                                # on any error, add no points
-
-
-def unshorten(url):
-    """Follow redirects. Returns (final_url, number_of_redirects)."""
-    try:
-        import requests
-        response = requests.get(normalize(url), timeout=5,
-                                headers={"User-Agent": "Mozilla/5.0"})
-        return response.url, len(response.history)
-    except Exception:
-        return normalize(url), 0
-
-
-def check_page(url):
-    """Look inside the web page for password boxes and suspicious forms."""
-    score = 0
-    reasons = []
-    try:
-        import requests
-        from bs4 import BeautifulSoup
-
-        response = requests.get(normalize(url), timeout=5,
-                                headers={"User-Agent": "Mozilla/5.0"})
-        html = response.text
-        soup = BeautifulSoup(html, "html.parser")
-        my_domain = tldextract.extract(url).registered_domain
-
-        # Password box on the page
-        if soup.find("input", {"type": "password"}) is not None:
-            score = score + 20
-            reasons.append("Page asks for a password")
-
-        # Form that sends data to another website
-        for form in soup.find_all("form"):
-            action = form.get("action", "")
-            if action.startswith("http"):
-                form_domain = tldextract.extract(action).registered_domain
-                if form_domain != my_domain:
-                    score = score + 30
-                    reasons.append("Form sends your data to a different website")
+    # 9b. Token-based brand impersonation in subdomain or compound name
+    if not brand_flagged and not is_official:
+        for brand in BRANDS:
+            if brand in host_labels and ext.domain != brand:
+                official_domains = BRANDS.get(brand, [])
+                if registered_domain not in official_domains:
+                    brand_flagged = True
+                    primary_official = official_domains[0] if official_domains else f"{brand}.com"
+                    signals.append({
+                        "kind": "HEURISTIC",
+                        "check": "brand_token_spoof",
+                        "title": f"Pretends to be '{brand.upper()}' but real domain is '{registered_domain}'",
+                        "evidence": f"Token '{brand}' in host '{host}'",
+                        "points": 30,
+                        "advice": f"Type {primary_official} yourself in the browser instead of using this link."
+                    })
                     break
 
-        # Hidden iframe
-        for frame in soup.find_all("iframe"):
-            style = frame.get("style", "").replace(" ", "")
-            if "display:none" in style:
-                score = score + 15
-                reasons.append("Hidden iframe found")
+    # 9c. Typosquatting via Levenshtein Edit Distance (Section 4)
+    if not brand_flagged and not is_official:
+        for brand, official_domains in BRANDS.items():
+            dist = levenshtein_distance(normalized_ext_domain, brand)
+            threshold = 1 if len(brand) <= 4 else 2
+            if 1 <= dist <= threshold:
+                primary_official = official_domains[0] if official_domains else f"{brand}.com"
+                signals.append({
+                    "kind": "HEURISTIC",
+                    "check": "typosquatting",
+                    "title": f"Looks like a deceptive spelling or typo of '{brand.upper()}'",
+                    "evidence": ext.domain,
+                    "points": 30,
+                    "advice": f"Type the official site {primary_official} directly into your address bar."
+                })
                 break
 
-        # Right-click blocked
-        if "oncontextmenu" in html.lower():
-            score = score + 5
-            reasons.append("Right-click is disabled on the page")
-    except Exception:
-        pass                                        # ignore errors, return what we have
-    return score, reasons
+    # Check 10: Optional Network Check via RDAP in api.py (D2, Section 5)
+    if online and not is_official:
+        try:
+            import api
+            rdap_res = api.lookup_domain_rdap(registered_domain)
+            if rdap_res.get("ok"):
+                age_days = rdap_res.get("age_days", 999)
+                if age_days < 30:
+                    signals.append({
+                        "kind": "FACT",
+                        "check": "domain_age",
+                        "title": f"Website was registered very recently ({age_days} days ago)",
+                        "evidence": f"{age_days} days",
+                        "points": 30,
+                        "advice": "Exercise extreme caution: Phishing sites are frequently registered days before attacks."
+                    })
+                elif age_days < 180:
+                    signals.append({
+                        "kind": "FACT",
+                        "check": "domain_age",
+                        "title": f"Website is relatively new ({age_days} days old)",
+                        "evidence": f"{age_days} days",
+                        "points": 10,
+                        "advice": "Verify the identity of relatively new domains before conducting financial operations."
+                    })
+            else:
+                signals.append({
+                    "kind": "FACT",
+                    "check": "domain_age_unavailable",
+                    "title": f"Domain age could not be checked: {rdap_res.get('error', 'Unknown')}",
+                    "evidence": registered_domain,
+                    "points": 0,
+                    "advice": "Check the domain's registration history on public RDAP/WHOIS databases if suspicious."
+                })
+        except ImportError:
+            signals.append({
+                "kind": "FACT",
+                "check": "domain_age_offline",
+                "title": "Domain age check skipped (api.py not found)",
+                "evidence": registered_domain,
+                "points": 0,
+                "advice": "Enable online RDAP lookups in api.py for domain age verification."
+            })
 
+    # Score Calculation & Level Decision (D4, D5)
+    raw_score = sum(s.get("points", 0) for s in signals)
+    score = max(0, min(100, raw_score))
 
-# =====================================================
-# 5. FULL URL SCAN (runs everything together)
-# =====================================================
-def full_url_scan(url, online=True):
-    score, reasons = check_url(url)
+    # D5 False-Alarm Rule: High requires strong FACT or >=2 distinct checks
+    if score < 30:
+        level = "Low"
+    elif score < 60:
+        level = "Caution"
+    else:
+        strong_fact_signals = [s for s in signals if s.get("kind") == "FACT" and s.get("points", 0) >= 20]
+        distinct_positive_checks = set(s.get("check") for s in signals if s.get("points", 0) > 0)
 
-    # Only do the slow internet checks if asked, and if not already 100
-    if online and score < 100:
-        final_url, hops = unshorten(url)
-
-        if hops >= 3:
-            score = score + 15
-            reasons.append(str(hops) + " redirects before reaching the website")
-
-        # If the link led somewhere else, check that final website too
-        if final_url != normalize(url):
-            final_score, final_reasons = check_url(final_url)
-            score = score + int(final_score / 2)    # count half the points
-            for r in final_reasons:
-                reasons.append("(Final site) " + r)
-
-        age_score, age_reasons = check_domain_age(final_url)
-        score = score + age_score
-        reasons = reasons + age_reasons
-
-        page_score, page_reasons = check_page(final_url)
-        score = score + page_score
-        reasons = reasons + page_reasons
-
-    if score > 100:
-        score = 100
-    return score, reasons
-
-
-# =====================================================
-# 6. MESSAGE CHECK (SMS / WhatsApp text)
-# =====================================================
-def find_links(text):
-    """Pick out the words that look like links."""
-    links = []
-    for word in text.split():                       # split message into words
-        word = word.strip(".,!?()\"'")              # remove punctuation at the ends
-        lower = word.lower()
-        if lower.startswith("http") or lower.startswith("www."):
-            links.append(word)
+        if len(strong_fact_signals) >= 1 or len(distinct_positive_checks) >= 2:
+            level = "High"
         else:
-            for ending in LINK_ENDINGS:
-                if ending in lower:
-                    links.append(word)
-                    break
+            level = "Caution"
+
+    # Compile Safe Next Steps (Section 10)
+    next_steps: List[str] = []
+    for s in signals:
+        advice = s.get("advice")
+        if advice and advice not in next_steps:
+            next_steps.append(advice)
+
+    if level == "High":
+        if "Report suspicious links and fraud at cybercrime.gov.in or call 1930." not in next_steps:
+            next_steps.append("Report suspicious links and fraud at cybercrime.gov.in or call 1930.")
+        if "For fraudulent SMS or calls, report via Chakshu on sancharsaathi.gov.in." not in next_steps:
+            next_steps.append("For fraudulent SMS or calls, report via Chakshu on sancharsaathi.gov.in.")
+
+    if not next_steps:
+        next_steps.append("No immediate red flags detected, but always confirm website identity before entering credentials.")
+
+    return {
+        "input": original_input,
+        "score": score,
+        "level": level,
+        "signals": signals,
+        "next_steps": next_steps
+    }
+
+
+# =====================================================
+# 4. MESSAGE ANALYSIS (SMS / WhatsApp) (D1, D3, D5, Section 9)
+# =====================================================
+
+def find_links(text: str) -> List[str]:
+    """Extract web links from text message accurately without substring collisions."""
+    links: List[str] = []
+    pattern = r"(?:https?://|www\.)[^\s<>'\"]+|[a-zA-Z0-9][-a-zA-Z0-9]*\.(?:com|org|in|net|xyz|top|click|co|ly|edu|gov|live|icu|io)(?:/[^\s<>'\"]*)?"
+
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        candidate = match.group(0).strip(".,!?()\"';:<>")
+        if "." in candidate and not candidate.endswith("."):
+            links.append(candidate)
+
     return links
 
 
-def check_message(text, online=False):
-    score = 0
-    reasons = []
-    low = text.lower()
+def analyze_text(text: str, online: bool = False) -> Dict[str, Any]:
+    """
+    Analyze message text for social engineering threats and embedded links.
+    Reuses analyze_url for links; message risk is at least as high as its riskiest link (Section 9).
+    """
+    original_input = text.strip()
+    if not original_input:
+        return {
+            "input": original_input,
+            "score": 0,
+            "level": "Low",
+            "signals": [],
+            "next_steps": ["Enter a message to analyze."]
+        }
 
-    # Urgency / reward words
+    signals: List[Dict[str, Any]] = []
+    text_lower = original_input.lower()
+
+    # Check 1: Urgency / Threat Keywords (Whole Words Only - Section 4 & 14)
     found_urgent = []
     for word in URGENT_WORDS:
-        if word in low:
+        pattern = rf"\b{re.escape(word)}\b"
+        if re.search(pattern, text_lower):
             found_urgent.append(word)
-    if len(found_urgent) > 0:
-        points = 10 * len(found_urgent)
-        if points > 30:
-            points = 30                             # keywords alone can't give more than 30
-        score = score + points
-        reasons.append("Urgency/reward words: " + ", ".join(found_urgent))
 
-    # Asking for secret information
-    found_secret = []
+    if found_urgent:
+        points = min(30, 10 * len(found_urgent))
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "urgency_language",
+            "title": f"High-urgency or coercive threat wording detected: {', '.join(found_urgent)}",
+            "evidence": ", ".join(found_urgent),
+            "points": points,
+            "advice": "Scammers manufacture artificial urgency to force hasty decisions. Pause and verify independently."
+        })
+
+    # Check 2: Requesting Confidential Information (Section 4)
+    is_warning = bool(re.search(
+        r"\b(?:do\s+not|don't|never|not)\s+(?:share|give|disclose|reveal)\b",
+        text_lower
+    ))
+
+    matched_secrets = []
     for word in SECRET_WORDS:
-        if word in low:
-            found_secret.append(word)
-    if len(found_secret) > 0:
-        score = score + 30
-        reasons.append("Asks for private info: " + ", ".join(found_secret))
+        pattern = rf"\b{re.escape(word)}\b"
+        if re.search(pattern, text_lower):
+            matched_secrets.append(word)
 
-    # "Pay Rs 1 to receive money" trick
-    if ("pay" in low or "send" in low) and ("receive" in low or "refund" in low):
-        score = score + 20
-        reasons.append("'Pay first to receive money' trick")
+    if matched_secrets and not is_warning:
+        has_prompt = bool(re.search(
+            r"\b(?:share|send|enter|submit|provide|verify|give|reply)\b",
+            text_lower
+        ))
+        if has_prompt:
+            signals.append({
+                "kind": "FACT",
+                "check": "asks_secret_info",
+                "title": f"Directly requests confidential credentials: {', '.join(matched_secrets)}",
+                "evidence": ", ".join(matched_secrets),
+                "points": 35,
+                "advice": "No legitimate bank or organization will ever ask for your OTP, PIN, or password. Never share them."
+            })
 
-    # Check every link inside the message
-    for link in find_links(text):
-        link_score, link_reasons = full_url_scan(link, online)
-        score = score + int(link_score / 2)         # count half the points
-        for r in link_reasons:
-            reasons.append("[" + link + "] " + r)
+    # Check 3: Advance-Fee / 'Pay to Receive' Patterns (Section 4 & 14)
+    pay_receive_pattern = r"\b(?:pay|send)\b[^\.\n;]{1,40}\b(?:to\s+)?(?:receive|claim|get|refund)\b"
+    digital_arrest_pattern = r"\b(?:digital\s+arrest|customs\s+seiz(?:ed|ure)|traffic\s+challan\s+pending)\b"
 
-    if score > 100:
-        score = 100
-    return score, reasons
+    if re.search(pay_receive_pattern, text_lower):
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "pay_to_receive_trick",
+            "title": "'Pay first to receive money or reward' deception detected",
+            "evidence": "Pay ... to receive/refund pattern",
+            "points": 25,
+            "advice": "Never pay an advance fee or processing charge to receive lottery winnings, prizes, or refunds."
+        })
+    elif re.search(digital_arrest_pattern, text_lower):
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "coercion_extortion_theme",
+            "title": "Known extortion theme detected (Digital Arrest / Customs / Challan)",
+            "evidence": "Extortion keyword pattern",
+            "points": 30,
+            "advice": "Law enforcement agencies never conduct 'digital arrests' or demand monetary settlements over phone or video."
+        })
 
+    # Check 4: Embedded Links Analysis (Section 9)
+    extracted_links = find_links(original_input)
+    max_link_score = 0
+    max_link_level = "Low"
 
-# =====================================================
-# 7. FINAL VERDICT
-# =====================================================
-def verdict(score):
-    """Turn a score into (label, colour, advice)."""
-    if score >= 60:
-        return "🔴 SCAM", "error", "Do NOT click. Never share OTP/PIN. Report at cybercrime.gov.in or call 1930."
-    elif score >= 30:
-        return "🟡 SUSPICIOUS", "warning", "Be careful. Open the official website yourself instead."
+    for link in extracted_links:
+        link_res = analyze_url(link, online=online)
+        max_link_score = max(max_link_score, link_res.get("score", 0))
+
+        link_level = link_res.get("level", "Low")
+        if link_level == "High":
+            max_link_level = "High"
+        elif link_level == "Caution" and max_link_level != "High":
+            max_link_level = "Caution"
+
+        for s in link_res.get("signals", []):
+            copied = dict(s)
+            copied["title"] = f"[{link}] {copied['title']}"
+            signals.append(copied)
+
+    # Combine Scores & Level Determination (Section 9)
+    text_only_points = sum(s.get("points", 0) for s in signals if not s.get("title", "").startswith("["))
+    combined_score = max(0, min(100, max_link_score + max(0, text_only_points)))
+
+    if combined_score < 30:
+        level = "Low"
+    elif combined_score < 60:
+        level = "Caution"
     else:
-        return "🟢 LIKELY SAFE", "success", "No major red flags, but stay alert."
+        strong_facts = [s for s in signals if s.get("kind") == "FACT" and s.get("points", 0) >= 20]
+        distinct_checks = set(s.get("check") for s in signals if s.get("points", 0) > 0)
+        if len(strong_facts) >= 1 or len(distinct_checks) >= 2:
+            level = "High"
+        else:
+            level = "Caution"
+
+    # Enforce Section 9: Message level must be at least as high as its riskiest link
+    if max_link_level == "High":
+        level = "High"
+    elif max_link_level == "Caution" and level == "Low":
+        level = "Caution"
+
+    # Compile Safe Next Steps (Section 10)
+    next_steps: List[str] = []
+    for s in signals:
+        advice = s.get("advice")
+        if advice and advice not in next_steps:
+            next_steps.append(advice)
+
+    if level == "High":
+        if "Report suspicious links and fraud at cybercrime.gov.in or call 1930." not in next_steps:
+            next_steps.append("Report suspicious links and fraud at cybercrime.gov.in or call 1930.")
+        if "For fraudulent SMS or calls, report via Chakshu on sancharsaathi.gov.in." not in next_steps:
+            next_steps.append("For fraudulent SMS or calls, report via Chakshu on sancharsaathi.gov.in.")
+
+    if not next_steps:
+        next_steps.append("No immediate red flags detected, but always verify unfamiliar requests through official channels.")
+
+    return {
+        "input": original_input,
+        "score": combined_score,
+        "level": level,
+        "signals": signals,
+        "next_steps": next_steps
+    }
+
+
+# =====================================================
+# 5. EVALUATION FUNCTION (D8, Section 13)
+# =====================================================
+
+def defang_url(text: str) -> str:
+    """Reverse common defanging techniques (hxxp, [.], [:]) before evaluation."""
+    text = text.replace("hxxps://", "https://").replace("hxxp://", "http://")
+    text = text.replace("[.]", ".").replace("[:]", ":")
+    return text
+
+
+def evaluate_examples(csv_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Evaluate all test cases in data/examples.csv (D8).
+    Returns total count, accuracy, false alarms (benign rated Caution/High),
+    and misses (suspicious rated Low).
+    """
+    if csv_path is None:
+        target_path = Path(__file__).resolve().parent / "data" / "examples.csv"
+    else:
+        target_path = Path(csv_path)
+
+    if not target_path.exists():
+        return {
+            "total": 0,
+            "correct": 0,
+            "accuracy": 0.0,
+            "false_alarms": [],
+            "misses": [],
+            "error": f"Evaluation dataset not found at {target_path}"
+        }
+
+    total = 0
+    correct = 0
+    false_alarms = []
+    misses = []
+
+    with open(target_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            total += 1
+            label = row.get("label", "").strip().lower()
+            channel = row.get("channel", "").strip().lower()
+            raw_input = row.get("input", "").strip()
+            why = row.get("why", "").strip()
+
+            clean_input = defang_url(raw_input)
+
+            if channel == "url":
+                result = analyze_url(clean_input, online=False)
+            else:
+                result = analyze_text(clean_input, online=False)
+
+            pred_level = result["level"]
+
+            if label == "benign":
+                if pred_level == "Low":
+                    correct += 1
+                else:
+                    false_alarms.append({
+                        "input": raw_input,
+                        "label": label,
+                        "predicted_level": pred_level,
+                        "score": result["score"],
+                        "why": why,
+                        "signals": [s["title"] for s in result["signals"]]
+                    })
+            elif label == "suspicious":
+                if pred_level in ("Caution", "High"):
+                    correct += 1
+                else:
+                    misses.append({
+                        "input": raw_input,
+                        "label": label,
+                        "predicted_level": pred_level,
+                        "score": result["score"],
+                        "why": why,
+                        "signals": [s["title"] for s in result["signals"]]
+                    })
+
+    accuracy = round(correct / total, 4) if total > 0 else 0.0
+
+    return {
+        "total": total,
+        "correct": correct,
+        "accuracy": accuracy,
+        "false_alarms": false_alarms,
+        "misses": misses
+    }
