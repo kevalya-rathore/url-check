@@ -32,32 +32,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import tldextract
 # suffix_list_urls=() makes tldextract use its bundled snapshot and never download (Section 1).
-_EXTRACTOR = tldextract.TLDExtract(cache_dir=False, suffix_list_urls=())
+_EXTRACTOR = tldextract.TLDExtract(cache_dir=False, suffix_list_urls=(), extra_suffixes=["bank.in"])
 
 # =====================================================
 # 1. SETTINGS & BRAND DATA (D7, Section 14)
 # =====================================================
-
-DEFAULT_BRANDS: Dict[str, List[str]] = {
-    "sbi": ["sbi.co.in", "onlinesbi.sbi"],
-    "hdfc": ["hdfcbank.com"],
-    "icici": ["icicibank.com"],
-    "paytm": ["paytm.com"],
-    "phonepe": ["phonepe.com"],
-    "amazon": ["amazon.in", "amazon.com"],
-    "google": ["google.com", "google.co.in"],
-    "flipkart": ["flipkart.com"],
-    "irctc": ["irctc.co.in"],
-    "indiapost": ["indiapost.gov.in"],
-    "uidai": ["uidai.gov.in"],
-    "incometax": ["incometax.gov.in"],
-    "parivahan": ["parivahan.gov.in"],
-    "npci": ["npci.org.in"],
-    "bhim": ["bhimupi.org.in"],
-    "tatapower": ["tatapower.com"],
-    "bescom": ["bescom.karnataka.gov.in"],
-    "mahadiscom": ["mahadiscom.in"]
-}
 
 
 def load_brands() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
@@ -66,16 +45,8 @@ def load_brands() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
     Returns (brand_to_domains, official_domain_to_brand).
     """
     brands_path = Path(__file__).resolve().parent / "data" / "brands.json"
-    brand_map = dict(DEFAULT_BRANDS)
-
-    if brands_path.exists():
-        try:
-            with open(brands_path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    brand_map = loaded
-        except Exception:
-            pass
+    with open(brands_path, "r", encoding="utf-8-sig") as f:
+        brand_map = json.load(f)
 
     # Reverse lookup for registered official domains
     official_domains: Dict[str, str] = {}
@@ -232,6 +203,46 @@ def detect_punycode_or_unicode(host: str) -> Tuple[bool, str]:
 
 
 # =====================================================
+# 2b. KNOWN PHISHING LIST (offline OpenPhish snapshot)
+# =====================================================
+
+FEED_DATE = "23 Oct 2026"
+
+# Services where one host serves many different people's files
+SHARED_STORAGE: Set[str] = {"backblazeb2.com", "contabostorage.com", "googleapis.com", "dropbox.com"}
+
+
+def url_key(url: str) -> str:
+    """Host + path in lowercase, without scheme, query or trailing slash, so two links can be compared."""
+    parsed = urlparse(url)
+    return ((parsed.hostname or "") + parsed.path).lower().rstrip("/")
+
+
+def load_phishing_feed() -> Tuple[Set[str], Set[str]]:
+    """Read data/openphish_feed.txt into (exact links, whole hosts). Never opens any of the links."""
+    feed_path = Path(__file__).resolve().parent / "data" / "openphish_feed.txt"
+    links: Set[str] = set()
+    hosts: Set[str] = set()
+    with open(feed_path, "r", encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            links.add(url_key(line))
+            host = (urlparse(line).hostname or "").lower()
+            ext = extract_domain_parts(line)
+            registered = f"{ext.domain}.{ext.suffix}".lower()
+            # On shared services one bad page doesn't make every page on that host bad
+            if host in FREE_HOSTS or registered in SHORTENERS or registered in SHARED_STORAGE or registered in OFFICIAL_DOMAINS:
+                continue
+            hosts.add(host)
+    return links, hosts
+
+
+PHISHING_LINKS, PHISHING_HOSTS = load_phishing_feed()
+
+
+# =====================================================
 # 3. URL ANALYSIS (D1, D3, D5, D6)
 # =====================================================
 
@@ -262,6 +273,8 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
     # Check A: Trusted Official Domain (D6)
     is_official = False
     official_brand_match = OFFICIAL_DOMAINS.get(registered_domain)
+    if official_brand_match is None and ext.suffix == "bank.in":
+        official_brand_match = ext.domain    # only RBI-verified banks can register .bank.in
     if official_brand_match:
         is_official = True
         signals.append({
@@ -310,6 +323,17 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
             "evidence": ", ".join(redirect_targets),
             "points": 35,
             "advice": "The real destination is the second website, not the trusted one at the start. Don't open it."
+        })
+
+    # Check 0: listed in the offline OpenPhish snapshot (a FACT about the list, not about the site today)
+    if url_key(url) in PHISHING_LINKS or host in PHISHING_HOSTS:
+        signals.append({
+            "kind": "FACT",
+            "check": "known_phishing",
+            "title": f"Listed as a phishing site in the OpenPhish feed (snapshot of {FEED_DATE})",
+            "evidence": host,
+            "points": 60,
+            "advice": "Don't open it. Report it at cybercrime.gov.in or call 1930."
         })
 
     # Check 1: Numeric IP host
@@ -438,7 +462,7 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
     brand_flagged = False
 
     # 9a. Exact brand name registered on unauthorized domain
-    if normalized_ext_domain in BRANDS:
+    if normalized_ext_domain in BRANDS and not is_official:
         matched_brand = normalized_ext_domain
         official_domains = BRANDS.get(matched_brand, [])
         if registered_domain not in official_domains:
@@ -482,7 +506,7 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
                     "check": "typosquatting",
                     "title": f"Looks like a deceptive spelling or typo of '{brand.upper()}'",
                     "evidence": ext.domain,
-                    "points": 30,
+                    "points": 25,
                     "advice": f"Type the official site {primary_official} directly into your address bar."
                 })
                 break
@@ -532,7 +556,7 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
             })
 
     # D6: no trusted-site credit when the trusted site is only carrying someone else's content
-    if any(s["check"] in ("hosting_abuse", "open_redirect") for s in signals):
+    if any(s["check"] in ("hosting_abuse", "open_redirect", "known_phishing") for s in signals):
         signals = [s for s in signals if s["check"] != "official_domain"]
 
     # Score Calculation & Level Decision (D4, D5)
