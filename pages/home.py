@@ -1,8 +1,12 @@
 # Home page: paste a link or a message and see its warning signs.
 # Shape: header -> input -> PART 1 (actions, only on submit) -> PART 2 (display, every rerun)
+import json
+
 import streamlit as st
 
-from logic import analyze_qr_text, analyze_text, analyze_url, decode_qr, refang_url
+from logic import analyze_page_links, analyze_qr_text, analyze_text, analyze_url, decode_qr, refang_url
+
+LEVEL_COLORS = {"High": "red", "Caution": "orange", "Low": "green"}
 
 
 def severity(points):
@@ -54,6 +58,30 @@ def show_signal(signal):
         st.code(signal["evidence"], language=None)
 
 
+def show_page_results(results):
+    """The extension's whole-page check: one card per link, riskiest first."""
+    st.divider()
+    if not results:
+        st.info("No links to other websites were found on that page.")
+        return
+    levels = [result["level"] for result in results]
+    st.subheader(f"{len(results)} links checked on the page", anchor=False)
+    with st.container(horizontal=True):    # how many links got each level
+        for level, color in LEVEL_COLORS.items():
+            if level in levels:
+                st.badge(f"{levels.count(level)} {level}", color=color)
+    order = {"High": 0, "Caution": 1, "Low": 2}
+    for result in sorted(results, key=lambda r: (order[r["level"]], -r["score"])):
+        with st.container(border=True):
+            st.badge(f"{result['level']} risk", color=LEVEL_COLORS[result["level"]])
+            st.code(result["input"], language=None)
+            warnings = [signal for signal in result["signals"] if signal["points"] > 0]
+            if warnings:
+                with st.expander(f"Why: {len(warnings)} warning sign(s)"):
+                    for signal in sorted(result["signals"], key=lambda s: s["points"], reverse=True):
+                        show_signal(signal)
+
+
 st.title("Aegis :violet[Guard]", anchor=False, text_alignment="center")    # "violet" is Athena Gold in our theme
 st.markdown("#### Stop the scam before the click", text_alignment="center")
 with st.container(horizontal=True, horizontal_alignment="center"):    # a centred row of trust badges
@@ -63,6 +91,8 @@ with st.container(horizontal=True, horizontal_alignment="center"):    # a centre
 
 if "result" not in st.session_state:
     st.session_state["result"] = None
+if "page_results" not in st.session_state:
+    st.session_state["page_results"] = None    # a list of results when the extension sends a whole page's links
 
 mode = st.segmented_control("What do you want to check?", ["Link", "Message", "QR code"], default="Link", required=True)
 
@@ -85,7 +115,18 @@ if not submitted and ("url" in params or "text" in params):
     submitted = True
     st.query_params.clear()    # check it once; later clicks on the page shouldn't check it again
 
+# A whole page's links arrive as ?links=[{"h": where the link goes, "t": the text shown on it}, ...]
+if "links" in params:
+    try:
+        links = list(json.loads(params["links"]))
+    except (ValueError, TypeError):
+        links = []
+    st.query_params.clear()
+    st.session_state["page_results"] = analyze_page_links(links, limit=40)
+
 # PART 1: actions, only on the run where the button was clicked
+if submitted:
+    st.session_state["page_results"] = None    # a new check replaces the page's list
 if submitted and mode == "QR code":
     if image is None:
         st.error("Choose a picture of a QR code first.")
@@ -117,7 +158,9 @@ elif submitted:
 
 # PART 2: display, on every rerun, read from session_state
 result = st.session_state["result"]
-if result is None:
+if st.session_state["page_results"] is not None:
+    show_page_results(st.session_state["page_results"])
+elif result is None:
     # Before the first check: three steps that explain what the app does
     st.divider()
     paste_col, check_col, verdict_col = st.columns(3)

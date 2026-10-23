@@ -26,7 +26,8 @@ How this file is organised:
     1. Settings      word lists, the brand list (data/brands.json), lookalike letters
     2. Helpers       small functions the checks use; 2b loads the phishing list; 2c turns points into a level
     3. analyze_url   runs 14 checks (0-13) on one link; 3b analyze_upi checks upi:// payment links;
-                     3c decode_qr reads a QR code picture and analyze_qr_text picks the right checker
+                     3c decode_qr reads a QR code picture and analyze_qr_text picks the right checker;
+                     analyze_link checks a link from a web page against the text shown on it
     4. analyze_text  checks a message, then runs analyze_url on every link inside it
     5. Evaluation    runs data/examples.csv through the analyzer for the Evaluation page
 
@@ -235,6 +236,7 @@ REDIRECT_WRAPPERS = {
     ("google.co.in", "/goto"): ("url",),
     ("facebook.com", "/l.php"): ("u",),
     ("youtube.com", "/redirect"): ("q",),
+    ("outlook.com", "/"): ("url",),    # Outlook's Safe Links, e.g. nam12.safelinks.protection.outlook.com/?url=...
 }
 
 # Services where one host serves many different people's files
@@ -756,6 +758,57 @@ def analyze_qr_text(text: str) -> dict:
     if " " in text or "\n" in text:
         return analyze_text(text)
     return analyze_url(text)    # analyze_url passes upi:// on to analyze_upi
+
+
+def analyze_link(href: str, text: str) -> dict:
+    """
+    Check a link found on a web page (sent by the browser extension): the usual link checks,
+    plus whether the text shown on the link names a different website from where it really goes.
+    """
+    result = analyze_url(href)
+    shown_links = find_links(text)
+    if not shown_links or href.lower().startswith("upi:"):
+        return result
+
+    # result["input"] is the real destination, already unwrapped from Google or Outlook redirect links
+    shown_host = (urlparse(normalize_url(shown_links[0])[0]).hostname or "").lower().removeprefix("www.")
+    real_host = (urlparse(normalize_url(result["input"])[0]).hostname or "").lower().removeprefix("www.")
+    if not shown_host or real_host == shown_host or real_host.endswith("." + shown_host):
+        return result
+
+    result["signals"].append({
+        "kind": "FACT",
+        "check": "text_link_mismatch",
+        "title": f"The link's text shows {shown_host} but it really goes to {real_host}",
+        "evidence": f"{shown_host} -> {real_host}",
+        "points": 35,
+        "advice": "Don't trust the text on a link. Type the website you expect into your address bar instead."
+    })
+    result["score"] = max(0, min(100, sum(signal["points"] for signal in result["signals"])))
+    result["level"] = decide_level(result["score"], result["signals"])
+    result["next_steps"] = build_next_steps(
+        result["signals"], result["level"],
+        "No immediate red flags detected, but always confirm website identity before entering credentials."
+    )
+    return result
+
+
+def analyze_page_links(links: list, limit: int) -> list:
+    """
+    Check a page's links sent by the extension: [{"h": where it goes, "t": the text shown on it}, ...].
+    Anything that isn't a valid link is skipped. Each result also gets "href", the link exactly as sent.
+    """
+    results = []
+    for link in links[:limit]:
+        if not isinstance(link, dict) or not link.get("h"):
+            continue
+        try:
+            result = analyze_link(str(link["h"]), str(link.get("t", "")))
+        except ValueError:
+            continue
+        result["href"] = str(link["h"])
+        results.append(result)
+    return results
 
 
 # =====================================================

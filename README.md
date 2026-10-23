@@ -14,7 +14,7 @@ Aegis Guard checks a link, an SMS/WhatsApp message, or a QR code for phishing wa
 - **Message check (working).** Urgency and threat words, requests for an OTP/PIN/password, "pay first to receive" tricks, Indian threat scams (digital arrest, customs, challan, electricity cut-off). Every link in the message is also run through the link check, and a message is never rated safer than its riskiest link.
 - **QR code check (working).** Upload a picture of a QR code. It is decoded from the pixels only (zxing-cpp), then checked as a link, a UPI payment or a message.
 - **UPI payment check (working).** For `upi://` links, typed in or from a QR code, the app checks for a malformed payee ID, autopay mandates, a pre-filled amount, "refund/prize/cashback" bait, and a payee using a bank or brand name. It always reminds you that a UPI QR code can only take money from you.
-- **Browser extension (working, load unpacked).** Right-click a link or selected text in Chrome and choose "Check with Aegis Guard". The extension opens the app with the link already checked.
+- **Browser extension (working, load unpacked).** Right-click a link or selected text in Chrome and choose "Check with Aegis Guard". The extension opens the app with the link already checked. Right-click the page itself to check every link on it: with `api.py` running, risky links get a warning badge right on the page, including links whose text names a different site from where they really go.
 - **Examples and Evaluation pages (working).** 58 labelled, synthetic, defanged examples. The Evaluation page runs all of them and lists every false alarm and miss.
 - **Defanged input (working).** `hxxps://` and `[.]` are turned back into a real link before checking.
 
@@ -35,6 +35,7 @@ Aegis Guard checks a link, an SMS/WhatsApp message, or a QR code for phishing wa
 | `pages/how_it_works.py` | Plain-language explanation of every check, the verdict rules and the limitations |
 | `logic.py` | All detection logic, no Streamlit: `analyze_url`, `analyze_text`, `analyze_upi`, `decode_qr`, `analyze_qr_text`, `evaluate_examples` |
 | `extension/` | The Chrome right-click extension |
+| `api.py` | Local-only server the extension uses to mark risky links on the page itself |
 | `assets/qr-test-images/` | Four sample QR codes for the demo (official SBI link, lookalike phishing link, fake UPI refund, normal shop UPI) |
 
 ## Setup
@@ -53,6 +54,8 @@ streamlit run app.py
 3. Right-click any link (or select a message) and choose **Check with Aegis Guard**.
 
 The extension sends to the live demo by default. To use a local copy, change `APP` in `extension/background.js` to `http://localhost:8501/` and reload the extension. It passes the link as `?url=...` (or a selected message as `?text=...`), and the home page checks it once on arrival.
+
+**Check a whole page.** Right-click empty space on a page and choose **Check all links on this page with Aegis Guard**. If `python api.py` is running (a local-only server on `127.0.0.1:8600`), risky links get a red or amber badge right on the page: hover over a badge for the reasons, or click it for the full explanation. Without `api.py`, up to 40 of the page's links open in the app as a list instead (`?links=...`).
 
 ## Environment variables
 None. The app runs fully offline and reads no secrets. `.streamlit/secrets.toml.example` is left over from the starter template.
