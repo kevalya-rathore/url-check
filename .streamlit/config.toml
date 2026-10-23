@@ -1,0 +1,22 @@
+# Shared look for every page: a deep navy dark theme with one teal accent colour
+[theme]
+base = "dark"
+# Teal-600: readable as white button text, and still visible against the dark background
+primaryColor = "#0D9488"
+backgroundColor = "#0B1220"            # deep navy instead of plain black
+secondaryBackgroundColor = "#131C2E"   # inputs and widgets, one step lighter
+textColor = "#E6EDF3"
+borderColor = "#24304A"
+codeBackgroundColor = "#0F1829"
+linkColor = "#2DD4BF"
+# Rounded cards and pill-shaped buttons
+baseRadius = "large"
+buttonRadius = "full"
+showWidgetBorder = true
+# Inter is loaded from Google Fonts; without internet the browser falls back to its normal sans-serif font
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap"
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+
+[client]
+# Hide the developer menu so the demo looks like a finished app
+toolbarMode = "minimal"

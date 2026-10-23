@@ -1,23 +1,19 @@
+# How it works page: a plain-language explanation of the checks, the scoring, and the limits.
 import streamlit as st
 
-st.set_page_config(
-    page_title="How It Works - Aegis Guard",
-    page_icon="🛡️",
-    layout="wide"
-)
-
-st.title("🛡️ How Aegis Guard Works")
-st.markdown(
-    "A transparent, plain-language guide to how Aegis Guard detects phishing threats, "
-    "how it scores risk, and what safeguards it applies."
-)
+st.title("How it works", anchor=False, text_alignment="center")
+st.markdown("#### What Aegis Guard checks, how it scores, and what it can't do", text_alignment="center")
+with st.container(horizontal=True, horizontal_alignment="center"):
+    st.badge("FACT = verifiable", icon=":material/verified:", color="blue")
+    st.badge("HEURISTIC = educated guess", icon=":material/lightbulb:", color="violet")
+    st.badge("No AI black box", icon=":material/rule:", color="gray")
 
 st.divider()
 
 # -----------------------------------------------------------------------------
 # 1. WHAT AEGIS GUARD DOES
 # -----------------------------------------------------------------------------
-st.header("1. What Aegis Guard does")
+st.header("1. What Aegis Guard does", anchor=False)
 st.markdown(
     """
     Aegis Guard is built for anyone in India who receives a suspicious or unexpected link by SMS, 
@@ -29,7 +25,7 @@ st.markdown(
 # -----------------------------------------------------------------------------
 # 2. WE NEVER OPEN THE LINK
 # -----------------------------------------------------------------------------
-st.header("2. Why we never open the link")
+st.header("2. Why we never open the link", anchor=False)
 st.markdown(
     """
     Our analysis inspects **only the text** of the link or message. We never connect to the destination server, 
@@ -51,7 +47,7 @@ st.markdown(
 # -----------------------------------------------------------------------------
 # 3. FACTS VS HEURISTICS
 # -----------------------------------------------------------------------------
-st.header("3. Facts vs Heuristics")
+st.header("3. Facts vs Heuristics", anchor=False)
 st.markdown(
     """
     Every warning signal produced by Aegis Guard is explicitly labeled as either a **FACT** or a **HEURISTIC**:
@@ -59,10 +55,10 @@ st.markdown(
 )
 
 col_fact, col_heur = st.columns(2)
-with col_fact:
+with col_fact.container(border=True):
+    st.badge("FACT", icon=":material/verified:", color="blue")
     st.markdown(
         """
-        ### 🔍 FACT
         Something objective that anyone can verify directly from the link or message text with complete certainty.
         
         *Examples:*
@@ -73,10 +69,10 @@ with col_fact:
         """
     )
 
-with col_heur:
+with col_heur.container(border=True):
+    st.badge("HEURISTIC", icon=":material/lightbulb:", color="violet")
     st.markdown(
         """
-        ### 💡 HEURISTIC
         An educated guess based on patterns frequently seen in scam campaigns. While indicative, a heuristic can occasionally be wrong.
         
         *Examples:*
@@ -94,7 +90,7 @@ st.info(
 # -----------------------------------------------------------------------------
 # 4. THE CHECKS
 # -----------------------------------------------------------------------------
-st.header("4. The checks and scoring signals")
+st.header("4. The checks and scoring signals", anchor=False)
 st.markdown(
     "Below are the security checks evaluated by our offline detection engine, "
     "along with their classification and risk point values:"
@@ -165,7 +161,7 @@ checks_data = [
         "Check": "Typo of a brand",
         "What it looks for": "Domain differs by one letter from a brand name of 5+ letters (e.g. paytn for paytm)",
         "Kind": "HEURISTIC",
-        "Points": "+30"
+        "Points": "+25"
     },
     {
         "Check": "Coercion theme",
@@ -229,7 +225,7 @@ checks_data = [
     },
 ]
 
-st.table(checks_data)
+st.table(checks_data, hide_index=True)
 
 with st.expander("Examples of common scam patterns (defanged)"):
     st.markdown("Here is how deceptive links structure these patterns:")
@@ -244,7 +240,7 @@ with st.expander("Examples of common scam patterns (defanged)"):
 # -----------------------------------------------------------------------------
 # 5. HOW THE SCORE BECOMES A LEVEL
 # -----------------------------------------------------------------------------
-st.header("5. How the score becomes a level")
+st.header("5. How the score becomes a level", anchor=False)
 st.markdown(
     """
     1. **Summing points:** Points from every triggered signal are summed together and bounded between **0 and 100**.
@@ -265,7 +261,7 @@ st.markdown(
 # -----------------------------------------------------------------------------
 # 6. KNOWN LIMITATIONS
 # -----------------------------------------------------------------------------
-st.header("6. Known limitations")
+st.header("6. Known limitations", anchor=False)
 with st.expander("Read our known limitations and design boundaries", expanded=False):
     st.markdown(
         """
@@ -293,11 +289,11 @@ with st.expander("Read our known limitations and design boundaries", expanded=Fa
 # -----------------------------------------------------------------------------
 # 7. WHAT'S BUILT, AND WHAT ISN'T
 # -----------------------------------------------------------------------------
-st.header("7. What's built, and what isn't")
+st.header("7. What's built, and what isn't", anchor=False)
 col_built, col_not_built = st.columns(2)
 
-with col_built:
-    st.success("### ✅ Built & running in this demo")
+with col_built.container(border=True):
+    st.badge("Built & running in this demo", icon=":material/check_circle:", color="green")
     st.markdown(
         """
         - **Offline link analysis:** Fast structural checks for brand spoofing, lookalikes, risky endings, and hidden destinations.
@@ -310,8 +306,8 @@ with col_built:
         """
     )
 
-with col_not_built:
-    st.warning("### ⏳ Not built / not enabled")
+with col_not_built.container(border=True):
+    st.badge("Not built / not enabled", icon=":material/schedule:", color="orange")
     st.markdown(
         """
         - **Domain-age registry lookup:** Not enabled in this demo (offline-only operation).
@@ -325,7 +321,7 @@ with col_not_built:
 # -----------------------------------------------------------------------------
 # 8. WHERE TO REPORT A SCAM
 # -----------------------------------------------------------------------------
-st.header("8. Where to report a scam")
+st.header("8. Where to report a scam", anchor=False)
 st.markdown(
     """
     If you encounter a phishing link or suspected financial fraud in India, report it through official government channels:
