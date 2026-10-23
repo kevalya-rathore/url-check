@@ -30,13 +30,7 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
-# Use tldextract with suffix_list_urls=() so it strictly uses the bundled snapshot
-# and never initiates a live network download (Section 1).
-try:
-    import tldextract
-    _EXTRACTOR = tldextract.TLDExtract(cache_dir=False, suffix_list_urls=())
-except Exception:
-    _EXTRACTOR = None
+import tldextract
 
 
 # =====================================================
@@ -49,8 +43,8 @@ DEFAULT_BRANDS: Dict[str, List[str]] = {
     "icici": ["icicibank.com"],
     "paytm": ["paytm.com"],
     "phonepe": ["phonepe.com"],
-    "amazon": ["amazon.in", "amazon.com", "amazonaws.com"],
-    "google": ["google.com", "google.co.in", "googleapis.com", "gstatic.com"],
+    "amazon": ["amazon.in", "amazon.com"],
+    "google": ["google.com", "google.co.in"],
     "flipkart": ["flipkart.com"],
     "irctc": ["irctc.co.in"],
     "indiapost": ["indiapost.gov.in"],
@@ -107,6 +101,8 @@ FREE_HOSTS: Set[str] = {
     "sites.google.com", "docs.google.com", "forms.google.com",
     "drive.google.com", "firebaseapp.com", "web.app", "github.io",
     "pages.dev", "weebly.com", "wixsite.com", "blogspot.com"
+    "pages.dev", "weebly.com", "wixsite.com", "blogspot.com",
+    "amazonaws.com", "googleapis.com"
 }
 
 PHISH_WORDS: List[str] = [
@@ -116,10 +112,10 @@ PHISH_WORDS: List[str] = [
 ]
 
 URGENT_WORDS: List[str] = [
-    "urgent", "suspended", "expire", "expired", "block", "blocked",
+    "urgent", "suspended", "expire", "expired", "blocked",
     "last chance", "act now", "action required", "immediately", "immediate",
     "penalty", "challan", "disconnect", "electricity cutoff", "power cutoff",
-    "digital arrest", "customs", "arrest warrant", "fine", "deactivation"
+    "digital arrest", "customs", "arrest warrant", "deactivation"
 ]
 
 SECRET_WORDS: List[str] = [
@@ -258,7 +254,7 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
     parsed = urlparse(url)
     ext = extract_domain_parts(url)
 
-    host = parsed.netloc.lower().split(":")[0]
+    host = (parsed.hostname or "").lower()
     registered_domain = f"{ext.domain}.{ext.suffix}".lower() if ext.suffix else ext.domain.lower()
 
     signals: List[Dict[str, Any]] = []
@@ -299,18 +295,22 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
                 "advice": "Attackers frequently host credential-harvesting forms on free services like Google Sites or Forms."
             })
 
-    # Check C: Open Redirect Query Parameters (Section 8)
-    if parsed.query:
-        query_decoded = unquote(parsed.query).lower()
-        if any(marker in query_decoded for marker in ["http://", "https://", "hxxp://", "hxxps://", "url=", "dest=", "redirect="]):
-            signals.append({
-                "kind": "HEURISTIC",
-                "check": "open_redirect",
-                "title": "Possible open redirect parameter in query string",
-                "evidence": parsed.query[:80],
-                "points": 25,
-                "advice": "Beware of links that forward through legitimate sites to third-party destinations."
-            })
+    # Check C: another website's link hidden in the query string (Section 8)
+    redirect_targets = []
+    for link in re.findall(r"https?://[^\s&]+", unquote(parsed.query), re.IGNORECASE):
+        target = extract_domain_parts(link)
+        target_domain = f"{target.domain}.{target.suffix}".lower()
+        if target_domain != registered_domain and target_domain not in OFFICIAL_DOMAINS:
+            redirect_targets.append(target_domain)
+    if redirect_targets:
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "open_redirect",
+            "title": "Forwards to a different website hidden inside the link",
+            "evidence": ", ".join(redirect_targets),
+            "points": 35,
+            "advice": "The real destination is the second website, not the trusted one at the start. Don't open it."
+        })
 
     # Check 1: Numeric IP host
     if is_ip_address(host):
@@ -324,7 +324,7 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
         })
 
     # Check 2: '@' symbol in URL
-    if "@" in original_input:
+    if "@" in parsed.netloc:
         signals.append({
             "kind": "FACT",
             "check": "at_symbol",
@@ -411,16 +411,6 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
             "advice": "Scammers frequently insert hyphens and numbers to create copycat domain names."
         })
 
-    if url.count("//") > 1:
-        signals.append({
-            "kind": "HEURISTIC",
-            "check": "multiple_slashes",
-            "title": "Multiple double slashes indicating potential redirect path",
-            "evidence": "//",
-            "points": 10,
-            "advice": "Verify that the link does not route through an unauthorized redirector."
-        })
-
     # Check 8: Phishing keywords in URL (Section 4)
     url_tokens = set(re.split(r"[/.\-_?&=]", parsed.path.lower() + " " + ext.subdomain.lower()))
     found_phish_words = [pw for pw in PHISH_WORDS if pw in url_tokens]
@@ -435,7 +425,13 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
         })
 
     # Check 9: Brand Impersonation & Typosquatting (Section 4, 11, 14)
-    normalized_ext_domain = normalize_visual_lookalikes(ext.domain)
+    readable_domain = ext.domain
+    if readable_domain.startswith("xn--"):
+        try:
+            readable_domain = readable_domain.encode("ascii").decode("idna")
+        except UnicodeError:
+            pass
+    normalized_ext_domain = normalize_visual_lookalikes(readable_domain)
     normalized_host = normalize_visual_lookalikes(host)
     host_labels = set(re.split(r"[.\-_]", normalized_host))
 
@@ -449,9 +445,9 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
             brand_flagged = True
             primary_official = official_domains[0] if official_domains else f"{matched_brand}.com"
             signals.append({
-                "kind": "FACT",
+                "kind": "HEURISTIC",
                 "check": "unauthorized_brand_domain",
-                "title": f"Uses exact brand name '{matched_brand.upper()}' on unauthorized domain '{registered_domain}'",
+                "title": f"Uses the name '{matched_brand.upper()}', but '{registered_domain}' is not one of its official sites",
                 "evidence": registered_domain,
                 "points": 40,
                 "advice": f"Type {primary_official} yourself in the browser instead of using this link."
@@ -479,8 +475,7 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
     if not brand_flagged and not is_official:
         for brand, official_domains in BRANDS.items():
             dist = levenshtein_distance(normalized_ext_domain, brand)
-            threshold = 1 if len(brand) <= 4 else 2
-            if 1 <= dist <= threshold:
+            if len(brand) >= 5 and dist == 1:
                 primary_official = official_domains[0] if official_domains else f"{brand}.com"
                 signals.append({
                     "kind": "HEURISTIC",
@@ -535,6 +530,10 @@ def analyze_url(raw_url: str, online: bool = False) -> Dict[str, Any]:
                 "points": 0,
                 "advice": "Enable online RDAP lookups in api.py for domain age verification."
             })
+
+    # D6: no trusted-site credit when the trusted site is only carrying someone else's content
+    if any(s["check"] in ("hosting_abuse", "open_redirect") for s in signals):
+        signals = [s for s in signals if s["check"] != "official_domain"]
 
     # Score Calculation & Level Decision (D4, D5)
     raw_score = sum(s.get("points", 0) for s in signals)
@@ -632,32 +631,24 @@ def analyze_text(text: str, online: bool = False) -> Dict[str, Any]:
             "advice": "Scammers manufacture artificial urgency to force hasty decisions. Pause and verify independently."
         })
 
-    # Check 2: Requesting Confidential Information (Section 4)
-    is_warning = bool(re.search(
-        r"\b(?:do\s+not|don't|never|not)\s+(?:share|give|disclose|reveal)\b",
-        text_lower
-    ))
+    # Check 2: asks for a secret, unless the sentence says NOT to share it (Section 4)
+    secret_words = "|".join(re.escape(w) for w in SECRET_WORDS)
+    request_pattern = r"\b(?:share|send|enter|tell|give|provide|reply with)\b[^.\n]{0,30}?\b(?:" + secret_words + r")\b"
+    asked_secrets = []
+    for match in re.finditer(request_pattern, text_lower):
+        before = text_lower[max(0, match.start() - 10):match.start()]
+        if not re.search(r"\b(?:not|never|don't|dont)\s*$", before):
+            asked_secrets.append(match.group(0))
 
-    matched_secrets = []
-    for word in SECRET_WORDS:
-        pattern = rf"\b{re.escape(word)}\b"
-        if re.search(pattern, text_lower):
-            matched_secrets.append(word)
-
-    if matched_secrets and not is_warning:
-        has_prompt = bool(re.search(
-            r"\b(?:share|send|enter|submit|provide|verify|give|reply)\b",
-            text_lower
-        ))
-        if has_prompt:
-            signals.append({
-                "kind": "FACT",
-                "check": "asks_secret_info",
-                "title": f"Directly requests confidential credentials: {', '.join(matched_secrets)}",
-                "evidence": ", ".join(matched_secrets),
-                "points": 35,
-                "advice": "No legitimate bank or organization will ever ask for your OTP, PIN, or password. Never share them."
-            })
+    if asked_secrets:
+        signals.append({
+            "kind": "HEURISTIC",
+            "check": "asks_secret_info",
+            "title": "Asks you to share a secret code or password",
+            "evidence": "; ".join(asked_secrets),
+            "points": 35,
+            "advice": "No legitimate bank or organization will ever ask for your OTP,re them."
+        })
 
     # Check 3: Advance-Fee / 'Pay to Receive' Patterns (Section 4 & 14)
     pay_receive_pattern = r"\b(?:pay|send)\b[^\.\n;]{1,40}\b(?:to\s+)?(?:receive|claim|get|refund)\b"
@@ -753,11 +744,20 @@ def analyze_text(text: str, online: bool = False) -> Dict[str, Any]:
 # 5. EVALUATION FUNCTION (D8, Section 13)
 # =====================================================
 
-def defang_url(text: str) -> str:
+def refang_url(text: str) -> str:
     """Reverse common defanging techniques (hxxp, [.], [:]) before evaluation."""
     text = text.replace("hxxps://", "https://").replace("hxxp://", "http://")
     text = text.replace("[.]", ".").replace("[:]", ":")
     return text
+
+
+def load_examples() -> List[Dict[str, str]]:
+    """Read data/examples.csv as a list of rows (used by the Examples page)."""
+    csv_path = Path(__file__).resolve().parent / "data" / "examples.csv"
+    if not csv_path.exists():
+        return []
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
 
 
 def evaluate_examples(csv_path: Optional[str] = None) -> Dict[str, Any]:
@@ -786,7 +786,7 @@ def evaluate_examples(csv_path: Optional[str] = None) -> Dict[str, Any]:
     false_alarms = []
     misses = []
 
-    with open(target_path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             total += 1
@@ -795,7 +795,7 @@ def evaluate_examples(csv_path: Optional[str] = None) -> Dict[str, Any]:
             raw_input = row.get("input", "").strip()
             why = row.get("why", "").strip()
 
-            clean_input = defang_url(raw_input)
+            clean_input = refang_url(raw_input)
 
             if channel == "url":
                 result = analyze_url(clean_input, online=False)
