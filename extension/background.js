@@ -39,7 +39,8 @@ function collectLinks() {
   return [...seen.values()];
 }
 
-// Runs inside the page: a badge after every risky link, and a summary box in the corner.
+// Runs inside the page: a badge after every risky link, a confirm box before a High-risk link opens,
+// and a summary box in the corner.
 // Only textContent and title are used, never innerHTML, because the reasons contain the suspicious links.
 function markLinks(results, manual) {
   document.querySelectorAll(".aegis-badge, #aegis-summary").forEach((old) => old.remove());    // clear an earlier check
@@ -60,6 +61,16 @@ function markLinks(results, manual) {
     badge.onclick = () => chrome.runtime.sendMessage({ check: result.href });
     a.style.outline = `2px solid ${colors[result.level]}`;
     a.after(badge);
+    if (result.level === "High" && !a.dataset.aegisBlocked) {
+      a.dataset.aegisBlocked = "1";    // a later re-check finds the guard already there and doesn't add a second one
+      const guard = (event) => {
+        if (confirm("Aegis Guard blocked this High-risk link:\n\n" + result.reasons.join("\n") + "\n\nOpen it anyway?")) return;
+        event.preventDefault();    // cancels the browser opening the link
+        event.stopImmediatePropagation();    // and stops the page's own click code from opening it instead
+      };
+      a.addEventListener("click", guard, true);
+      a.addEventListener("auxclick", guard, true);    // a middle-click opens a new tab without a "click" event
+    }
   }
 
   const high = results.filter((result) => result.level === "High").length;

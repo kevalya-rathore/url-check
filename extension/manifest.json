@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Aegis Guard",
-  "version": "1.3",
-  "description": "Marks risky links on every page you open, and lets you click the toolbar button or right-click a link, a selected message or the page to check it with Aegis Guard.",
+  "version": "1.4",
+  "description": "Marks risky links on every page you open, and lets you click the toolbar button or right-click a link, a selected message or the page to check it with Aegis Guard. Asks before opening a High-risk link.",
   "permissions": ["contextMenus", "activeTab", "scripting"],
   "host_permissions": ["http://127.0.0.1:8600/*", "<all_urls>"],
   "action": { "default_title": "Check all links on this page with Aegis Guard" },
