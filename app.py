@@ -2,7 +2,7 @@
 # Run with "streamlit run app.py". Each page lives in its own file in the pages/ folder.
 import streamlit as st
 
-st.set_page_config(page_title="Aegis Guard", page_icon="🛡️")
+st.set_page_config(page_title="Aegis Guard", page_icon="assets/icon.svg")
 st.logo("assets/logo.svg", size="large")
 
 # The theme file can't set button text colour, so these two rules follow the AEGIS palette:
